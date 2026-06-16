@@ -7,6 +7,7 @@ One file per source. Lead with the URL and a one-line summary, then notes on wha
 Examples to seed:
 
 - `ktm-can-library.md` — blalor/ktm-can (KTM 690 platform, methodology reference)
+- `husqvarna-community-notes.md` — running bucket of forum/Reddit snippets about Husqvarna 401 CAN signals
 - `projectpilen.md` — closed-source community dashboard
 - `bad-winners-dashboard.md` — closed-source commercial replacement
 

@@ -25,7 +25,7 @@
 1. Build the physical adapter: ESP32-S3 + SN65HVD230 + connector pigtail, per `docs/hardware/can-adapter.md`.
 2. Stand up `firmware/can-logger/` PlatformIO project: ESP-IDF target, TWAI in listen-only mode on GPIO4/5, SLCAN emit loop. Start at 500 kbps with a `#define` or Kconfig to drop to 250 kbps if needed.
 3. Write the host-side capture script under `scripts/` — `python-can` SLCAN bus → raw capture file into `logs/YYYY-MM-DD-key-on/`.
-4. First capture session: key-on, no engine, log frames. Goal is to confirm bus is alive and lock the bitrate.
+4. First capture session: **start logging before key-on** and run continuously through the full self-test into steady-state idle. Goal is to confirm bus is alive, lock the bitrate, and capture the boot-time dash↔ECU exchange that initializes ABS/TC/QS — community reports (see `docs/references/husqvarna-community-notes.md`) suggest this window contains traffic that's easy to miss with a late capture start.
 5. Promote the confirmed bitrate to a finding under `docs/findings/can/`.
 
 ## Open questions (from `docs/research.md`)
