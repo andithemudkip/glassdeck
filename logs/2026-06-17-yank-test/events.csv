@@ -1,0 +1,2 @@
+timestamp_iso,timestamp_monotonic,key,label
+2026-06-17T09:32:54.946078+00:00,2670.512025,disconnect,CanOperationError: Could not read from serial device

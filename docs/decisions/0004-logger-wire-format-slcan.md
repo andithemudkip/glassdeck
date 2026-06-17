@@ -24,8 +24,14 @@ Throughput sanity check: worst-case CAN at 500 kbps is ~4000 frames/sec; SLCAN e
 
 ## Consequences
 
-- Laptop-side capture script is short — `python-can` opens the serial port as an `slcan` bus and iterates `bus.recv()`.
+- Laptop-side capture script reads the USB-CDC port directly with `pyserial` and parses SLCAN frame lines into `can.Message` objects itself (see `scripts/capture.py`). Captured frames are still written via `can.Logger` so the output `.log` is standard candump format.
 - Captured `.log` files load directly into SavvyCAN, can-utils, and Wireshark without conversion.
 - Bring-up debugging is trivial: `screen /dev/tty.usbmodem... 115200` shows raw frames as they arrive.
 - Deviation from the SLCAN spec (no command channel) is documented here so future readers don't waste time wondering why `O` / `C` / `Sxx` aren't supported.
 - If timestamp jitter ever matters, the firmware can add `Z<msb><lsb>` timestamp extensions (also SLCAN-standard) — supersede this ADR if so.
+
+## Update 2026-06-17
+
+The original consequence claimed *"`python-can` opens the serial port as an `slcan` bus and iterates `bus.recv()` — the standard SLCAN backend tolerates a passive adapter."* This is false on python-can ≥ 4.3 / Python 3.14 / macOS: `slcan.SLCANBus.__init__` calls `set_bitrate()` which writes `S<n>\r` and then `serial.flush()` → `termios.tcdrain()`. Against a firmware that doesn't drain its USB-CDC RX buffer, `tcdrain()` blocks indefinitely and `Ctrl-C` during init produces a stacktrace from deep inside python-can.
+
+The decision (SLCAN wire format, firmware→host only) stands. The capture script no longer uses the `slcan` interface — it opens the port with `pyserial`, reads `\r`-terminated lines with `read_until()`, and parses them via `parse_slcan_line()` in `scripts/capture.py`. First observed during the aborted `2026-06-17-key-off-baseline` capture attempt.

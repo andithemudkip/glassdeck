@@ -1,0 +1,21 @@
+# Route stdio to the built-in USB-Serial/JTAG controller (the port labelled USB
+# on the DevKitC-1). This is where SLCAN frames go. UART0 (the UART/COM bridge
+# port) is unused.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED=y
+
+# Silence the IDF bootloader / app banner on the console so the SLCAN stream
+# starts cleanly. Per-component log levels are also turned down in main.c.
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
+CONFIG_LOG_DEFAULT_LEVEL_WARN=y
+CONFIG_LOG_MAXIMUM_LEVEL_WARN=y
+
+# Match the DevKitC-1 N8/N16 module's actual flash size. Default 2 MB
+# would refuse to flash on these modules.
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+
+# TWAI is built into the IDF; no extra component config needed.
+
+# Slightly larger main task stack — the SLCAN format buffer + printf headroom
+# is comfortable here without being wasteful.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=4096

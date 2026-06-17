@@ -1,0 +1,5 @@
+timestamp_iso,timestamp_monotonic,key,label
+2026-06-17T16:18:42.629955+00:00,24360.606032,mark,generic mark
+2026-06-17T16:19:14.471028+00:00,24392.447002,start,starter button
+2026-06-17T16:19:19.692553+00:00,24397.668538,mark,generic mark
+2026-06-17T16:22:14.442682+00:00,24572.418614,kill,kill switch
