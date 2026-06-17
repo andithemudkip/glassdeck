@@ -28,8 +28,8 @@
   - [`findings/can/bitrate.md`](findings/can/bitrate.md) — 500 kbps, classic CAN, 11-bit IDs.
   - [`findings/can/always-on-broadcast-ids.md`](findings/can/always-on-broadcast-ids.md) — `confirmed`. 11 IDs in 10/20/50/100 ms cohorts; ID set invariant with engine state.
   - [`findings/can/post-kill-decay-groups.md`](findings/can/post-kill-decay-groups.md) — `confirmed`. Clean 5-vs-6 split (Fast: `120`, `121`, `129`, `540`, `5B0`; Slow: `12A`, `12D`, `12E`, `450`, `541`, `5A0`).
-  - [`findings/can/signal-rpm.md`](findings/can/signal-rpm.md) — **new, `confirmed`.** Engine RPM at `120` D0,D1 big-endian uint16. Idle ~1700 RPM.
-  - [`findings/can/signal-coolant-temp.md`](findings/can/signal-coolant-temp.md) — **new, `confirmed`.** Coolant temp at `540` D5,D6 big-endian uint16 ÷10 °C. Range verified 25 °C → 92 °C.
+  - [`findings/can/signal-rpm.md`](findings/can/signal-rpm.md) —`confirmed`. Engine RPM at `120` D0,D1 big-endian uint16. Idle ~1700 RPM.
+  - [`findings/can/signal-coolant-temp.md`](findings/can/signal-coolant-temp.md) — `confirmed`. Coolant temp at `540` D5,D6 big-endian uint16 ÷10 °C. Range verified 25 °C → 92 °C.
   - [`findings/bike/dash-warning-lights.md`](findings/bike/dash-warning-lights.md) — check-engine extinguishes ~1 s after engine start; ABS extinguishes once speed exceeds ~6 km/h.
 - External references:
   - [`references/ktm-can-decoder.md`](references/ktm-can-decoder.md) — **new.** Cross-walk to the public ktm-can decoder (2020 KTM 690 Enduro R). Shares the Bosch ECU broadcast scheduler with this platform: 5 of our 11 IDs have a KTM hypothesis to test (`120`, `129`, `12A`, `450`, `540`). Confirmed lesson: byte positions can shift ±1 byte between Bosch ECU variants (coolant temp at D5,D6 on Husqvarna vs D6,D7 on KTM).
