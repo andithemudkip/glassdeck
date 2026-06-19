@@ -3,20 +3,23 @@ area: can
 status: confirmed
 established_by:
   - 2026-06-17-engine-idle-baseline-x3
+  - 2026-06-18-kill-switch-toggle
 ---
 
 # Post-kill decay groups — at least two source modules
 
-After the kill switch is pressed, the 11 always-on broadcast IDs do not stop transmitting at the same time. They cleanly split into two groups by how quickly their last frame appears after the `kill switch` event:
+When the kill switch goes to STOP, the 11 always-on broadcast IDs do not stop transmitting at the same time. They cleanly split into two groups by how quickly their last frame appears after the kill toggle:
 
-| Group         | IDs                                  | Last frame after kill (range across 3 runs) |
+| Group         | IDs                                  | Last frame after kill (range)               |
 |---------------|--------------------------------------|--------------------------------------------:|
-| **Fast**      | `120`, `121`, `129`, `540`, `5B0`    |                              0.18 – 0.31 s  |
+| **Fast**      | `120`, `121`, `129`, `540`, `5B0`    |                              0.18 – ~1.0 s  |
 | **Slow**      | `12A`, `12D`, `12E`, `450`, `541`, `5A0` |                          4.69 – 7.06 s  |
 
 The split is exactly 5 vs 6, with the same IDs on each side every run.
 
 This is the first observed evidence that the 11-ID always-on broadcast set originates from **at least two physically distinct modules** — modules that lose CAN-bus broadcasting capability on different timescales when the kill switch breaks the engine-run circuit. A single module would shed all of its IDs together.
+
+**Engine state at kill-time doesn't matter.** Both the engine-on case ([`2026-06-17-engine-idle-baseline-x3`](../../experiments/2026-06-17-engine-idle-baseline-x3.md), three runs) and the engine-off case ([`2026-06-18-kill-switch-toggle`](../../experiments/2026-06-18-kill-switch-toggle.md), three STOP windows) show the same grouping and the same Fast-group sub-second tail. What triggers the decay is the kill switch going to STOP, not the engine stopping. (The engine-off tails extend to ~1 s rather than 0.31 s, but every frame in every STOP window of the kill-toggle capture landed in the first second after the toggle — seconds 1–5 were flat zero. Whether the upper tail genuinely runs out to ~1 s engine-off vs. ~0.31 s engine-on, or whether it's bin-edge / sample-size noise, isn't worth a follow-up at this point.)
 
 ## What this is *not* a finding for (yet)
 

@@ -28,6 +28,7 @@ The ktm-can decoder is a **hypothesis source**, not a drop-in decoder for the Sv
 |--------------|----------------|--------------------------|-----------------------|----------------|
 | Engine RPM   | `120` D0,D1    | **same — `120` D0,D1**   | Big-endian uint16     | [[signal-rpm]] |
 | Coolant temp | `540` D6,D7    | **`540` D5,D6 (shifted -1 byte)** | Big-endian uint16, divide by 10 → °C | [[signal-coolant-temp]] |
+| Kill switch  | `120` D3 bit 4 | **`541` D2 bit 4 (different ID)** | 1 = run, 0 = stop (polarity matches KTM) | [[signal-kill-switch]] |
 
 ### Hypotheses to test in future per-input captures
 
@@ -35,7 +36,6 @@ Listed in priority order — easiest to test first, all engine-off where possibl
 
 | Signal                       | KTM location           | Test (suggested capture)                                  |
 |------------------------------|------------------------|-----------------------------------------------------------|
-| Kill switch (1=run, 0=stop)  | `120` D3, bit 4        | Engine-off: toggle kill switch with hotkey `k`            |
 | Throttle position            | `120` D2 (range 0-255) | Engine-off: throttle sweep capture                        |
 | Gear position                | `129` D0 hi nibble; `540` D3 lo nibble | Cycle through gears with clutch (engine off OK) |
 | Clutch switch                | `129` D0 bit 3         | Engine-off: clutch in/out a few times                     |

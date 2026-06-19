@@ -1,0 +1,67 @@
+---
+area: can
+status: confirmed
+established_by:
+  - 2026-06-18-throttle-sweep-engine-off
+references:
+  - ktm-can-decoder
+---
+
+# Throttle position — `120` byte D2 (uint8, 0–254)
+
+Throttle (grip) position on the 2020 Husqvarna Svartpilen 401 is broadcast in arbitration ID **`0x120`**, byte **D2**, as an unsigned 8-bit integer covering the grip travel.
+
+```
+throttle = data[2]            # 0 = closed, 254 = wide-open
+throttle_pct = throttle / 254.0
+```
+
+Update rate: 20 ms (the broadcast period of `120` — see [[always-on-broadcast-ids]]).
+
+## Verified range
+
+Across the engine-off slow-sweep capture of [`2026-06-19-throttle-sweep-engine-off`](../../../logs/2026-06-19-throttle-sweep-engine-off/):
+
+| Phase | n (120 frames) | min | max | mean |
+|---|---:|---:|---:|---:|
+| slow sweep (open → hold → close → hold) | 1040 | 0 | 254 | 114.4 |
+| step response (snap open / snap close) | 383 | 0 | 254 | 93.1 |
+| reproducibility slow sweep | 1060 | 0 | 254 | 128.4 |
+
+166 distinct values observed across the slow sweep — D2 sweeps cleanly through nearly every integer 0..254 as the rider drives the grip through its full travel.
+
+**Max is 254, not 255.** Wide-open broadcasts `0xFE`, not `0xFF`. Whether this is a deliberate sentinel reservation at the top of the range (cf. some KTM dyno maps using `0xC8`/200 as full scale) or a calibration ceiling has not been characterised. Use 254 as full-scale for the dashboard's throttle gauge until contradicted.
+
+Throttle-closed broadcasts exact `0x00`. No dead-band observed at the closed end — `0` is reached and held cleanly when the rider releases the grip.
+
+The signal is meaningful **with the engine off** because the throttle on this bike is ride-by-wire — the ECU samples the grip-position sensor and broadcasts it from key-on regardless of combustion state.
+
+## Cross-walk vs KTM
+
+The ktm-can decoder ([reference](../../references/ktm-can-decoder.md)) places throttle at `120` D2 with a 0–255 range on the 2020 KTM 690 Enduro R. **Byte position and ID match exactly.** The Husqvarna observed maximum is 254, one count below KTM's stated 255 — close enough that this is probably the same encoding with a minor calibration difference, not a different scheme.
+
+## Engine-off invariant cross-check
+
+Across all 3 183 `120` frames in this capture, D0,D1 (RPM — see [[signal-rpm]]) read exact `0x00 0x00`. RPM is the engine-off zero, throttle byte sweeps cleanly — the throttle channel is fully decoupled from RPM in the broadcast layer.
+
+## Refutations from the same capture
+
+The throttle sweep also tested two adjacent hypotheses; both were rejected by this capture and should not propagate as assumptions:
+
+- **`12A` D0 bit 1 ≠ throttle-open flag.** Zero transitions of this bit across 53 s spanning the full throttle range. Whatever this bit encodes, it is not "throttle off the stop". Re-derive: `python scripts/throttle_sweep.py`, see the "0→1 flips" / "1→0 flips" lines.
+- **`120` D7 ≠ second throttle sensor (APP2).** D7 looked like a candidate from its range (32–223, 186 unique values), but a frame-by-frame Pearson correlation with D2 gives r = −0.012; D7's mean stays ~125–132 across every D2 bin. See [[byte-d7-checksum-hypothesis]] for the leading interpretation.
+
+## Open
+
+- **Engine-on behaviour.** Encoding confirmed engine-off; engine-on confirmation pending in [`2026-06-18-engine-on-stationary-inputs`](../../experiments/2026-06-18-engine-on-stationary-inputs.md). Expectation: D2 behaves identically; the throttle channel is independent of engine state.
+- **Map / RBW state bit (`12A` D1 bit 6).** Stuck at 0 across the engine-off sweep. Engine-off may suppress it — re-test engine-on per the experiment above.
+- **`541` D6 weak correlation.** r ≈ +0.26 vs D2 across this capture with range 20 counts. Could be coincidental drift, could be a heavily filtered throttle derivative. Re-test with a longer / dual-direction sweep before promoting or rejecting.
+- **Full-scale ceiling.** Verify whether 254 is a hard ceiling (sentinel) or a calibration knee by capturing a hard-to-the-stop snap; if the value briefly overshoots to 255 the ceiling is calibration, if it never does, 254 is likely a reserved sentinel.
+
+## Evidence
+
+- [`docs/experiments/2026-06-18-throttle-sweep-engine-off.md`](../../experiments/2026-06-18-throttle-sweep-engine-off.md) — hypothesis, procedure, result.
+- [`logs/2026-06-19-throttle-sweep-engine-off/`](../../../logs/2026-06-19-throttle-sweep-engine-off/) — raw capture; `120_d2_timeseries.decoded.csv` written by the analysis script.
+- [`scripts/throttle_sweep.py`](../../../scripts/throttle_sweep.py) — re-derives every number above from the capture.
+
+See also: [[always-on-broadcast-ids]], [[signal-rpm]], [[byte-d7-checksum-hypothesis]], [[ktm-can-decoder]].

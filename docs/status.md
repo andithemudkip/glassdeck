@@ -2,7 +2,7 @@
 
 **Phase:** 1 — CAN logger / capture inventory.
 
-**Last updated:** 2026-06-17
+**Last updated:** 2026-06-19
 
 ## Hardware on hand
 
@@ -30,6 +30,9 @@
   - [`findings/can/post-kill-decay-groups.md`](findings/can/post-kill-decay-groups.md) — `confirmed`. Clean 5-vs-6 split (Fast: `120`, `121`, `129`, `540`, `5B0`; Slow: `12A`, `12D`, `12E`, `450`, `541`, `5A0`).
   - [`findings/can/signal-rpm.md`](findings/can/signal-rpm.md) —`confirmed`. Engine RPM at `120` D0,D1 big-endian uint16. Idle ~1700 RPM.
   - [`findings/can/signal-coolant-temp.md`](findings/can/signal-coolant-temp.md) — `confirmed`. Coolant temp at `540` D5,D6 big-endian uint16 ÷10 °C. Range verified 25 °C → 92 °C.
+  - [`findings/can/signal-kill-switch.md`](findings/can/signal-kill-switch.md) — `confirmed`. Kill switch at `541` D2 bit 4 (1=run, 0=stop). KTM polarity preserved, location moved (KTM placed it on `120` D3 bit 4). Same capture generalises [[post-kill-decay-groups]]: Fast group decays sub-second whenever kill→STOP, engine-on or engine-off.
+  - [`findings/can/signal-throttle-position.md`](findings/can/signal-throttle-position.md) — `confirmed`. Throttle position at `120` D2 uint8, range 0–254 (not 255). KTM byte position transfers exactly. Refuted: `12A` D0 bit 1 is not the throttle-open flag.
+  - [`findings/can/byte-d7-checksum-hypothesis.md`](findings/can/byte-d7-checksum-hypothesis.md) — `confirmed` as an observation. D7 on 9 of 11 always-on IDs behaves like a checksum/hash over D0..D6: 6 unique values on static-payload IDs, 100+ on active-payload IDs. Algorithm not yet reproduced.
   - [`findings/bike/dash-warning-lights.md`](findings/bike/dash-warning-lights.md) — check-engine extinguishes ~1 s after engine start; ABS extinguishes once speed exceeds ~6 km/h.
 - External references:
   - [`references/ktm-can-decoder.md`](references/ktm-can-decoder.md) — **new.** Cross-walk to the public ktm-can decoder (2020 KTM 690 Enduro R). Shares the Bosch ECU broadcast scheduler with this platform: 5 of our 11 IDs have a KTM hypothesis to test (`120`, `129`, `12A`, `450`, `540`). Confirmed lesson: byte positions can shift ±1 byte between Bosch ECU variants (coolant temp at D5,D6 on Husqvarna vs D6,D7 on KTM).
@@ -43,8 +46,8 @@
 The payload-diff has narrowed the search space dramatically. Each remaining signal has a KTM hypothesis at a specific (ID, byte/bit) location and a residual ~20–40 candidate bytes per ID after subtracting STATIC/LOW-CARD-stationary. Pick from these:
 
 1. **Engine-off batch** (cheapest, no engine, ~15 min each):
-   - **Throttle sweep** — engine off, twist throttle slowly from 0 to wide-open and back. Hypothesised target: `120` D2 (range 0-255 per KTM). Also catches `12A` D0 bit 1 (throttle open/closed flag) and `12A` D1 bit 6 (requested map).
-   - **Kill switch toggle** — engine off, toggle the kill switch a few times with hotkey `k`. Hypothesised target: `120` D3 bit 4 per KTM, **but our static read says bit 4 = 0 while kill is in run position**, which conflicts with KTM. The toggle resolves it.
+   - ~~**Throttle sweep**~~ — done 2026-06-19, see [[signal-throttle-position]]. `120` D2 confirmed, full scale 254 not 255. `12A` D0 bit 1 refuted; `12A` D1 bit 6 unconfirmed (engine-off suppresses; re-test engine-on). Side finding [[byte-d7-checksum-hypothesis]] surfaced from the same capture. Reusable analysis: [`scripts/throttle_sweep.py`](../scripts/throttle_sweep.py).
+   - ~~**Kill switch toggle**~~ — done 2026-06-19, see [[signal-kill-switch]]. Bit is at `541` D2 bit 4, not `120` D3. Reusable analysis: [`scripts/kill_switch_scan.py`](../scripts/kill_switch_scan.py).
    - **Gear shift cycle** — engine off, clutch in, cycle 1-N-2-N-3-N etc. Hypothesised target: `129` D0 hi nibble + `540` D3 lo nibble.
    - **Clutch in/out** — engine off, pump clutch lever. Hypothesised target: `129` D0 bit 3.
    - **Side stand up/down** — engine off. Hypothesised target: `540` D4 bit 0.
