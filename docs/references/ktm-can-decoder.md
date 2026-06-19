@@ -27,8 +27,11 @@ The ktm-can decoder is a **hypothesis source**, not a drop-in decoder for the Sv
 | Signal       | Location (KTM) | Location (Husqvarna 401) | Encoding              | Established by |
 |--------------|----------------|--------------------------|-----------------------|----------------|
 | Engine RPM   | `120` D0,D1    | **same — `120` D0,D1**   | Big-endian uint16     | [[signal-rpm]] |
+| Throttle position | `120` D2  | **same — `120` D2**      | uint8, range 0–254    | [[signal-throttle-position]] |
+| Gear position (N, 1) | `129` D0 hi nibble | **same — `129` D0 hi nibble** | `0=N, 1–6=gears` (2–6 unverified) | [[signal-gear-position]] |
 | Coolant temp | `540` D6,D7    | **`540` D5,D6 (shifted -1 byte)** | Big-endian uint16, divide by 10 → °C | [[signal-coolant-temp]] |
 | Kill switch  | `120` D3 bit 4 | **`541` D2 bit 4 (different ID)** | 1 = run, 0 = stop (polarity matches KTM) | [[signal-kill-switch]] |
+| Side stand   | `540` D4 bit 0 | **`540` D3 bit 0 (shifted -1 byte)** | 1 = up, 0 = down (polarity matches KTM) | [[signal-side-stand]] |
 
 ### Hypotheses to test in future per-input captures
 
@@ -36,14 +39,11 @@ Listed in priority order — easiest to test first, all engine-off where possibl
 
 | Signal                       | KTM location           | Test (suggested capture)                                  |
 |------------------------------|------------------------|-----------------------------------------------------------|
-| Throttle position            | `120` D2 (range 0-255) | Engine-off: throttle sweep capture                        |
-| Gear position                | `129` D0 hi nibble; `540` D3 lo nibble | Cycle through gears with clutch (engine off OK) |
-| Clutch switch                | `129` D0 bit 3         | Engine-off: clutch in/out a few times                     |
-| Throttle open/closed flag    | `12A` D0 bit 1         | Same throttle sweep capture                               |
+| Clutch switch                | `129` D0 bit 3         | Engine-off scan refuted; revalidate engine-on              |
+| Throttle open/closed flag    | `12A` D0 bit 1         | Refuted engine-off ([[signal-throttle-position]]); revalidate engine-on |
 | Throttle map (actual)        | `120` D4 bit 0         | Cycle ROAD/SUPERMOTO map switch                           |
-| Throttle map (requested)     | `12A` D1 bit 6         | Same capture as above                                     |
+| Throttle map (requested)     | `12A` D1 bit 6         | Engine-off suppressed; revalidate engine-on               |
 | Traction control button      | `450` D2 bit 0         | Press TC button if equipped                               |
-| Kickstand up flag            | `540` D4 bit 0         | Side stand up vs down (engine off)                        |
 | Kickstand error              | `540` D4 bit 7         | Hard to engineer — keep an eye on it                      |
 | Key-on / engine-running flag | `540` D4 bit 3         | Already validated indirectly via [[always-on-broadcast-ids]] — confirm bit position |
 
@@ -53,15 +53,20 @@ Listed in priority order — easiest to test first, all engine-off where possibl
 - **`540` D1,D2 = RPM (slow update)**: KTM claims `540` carries the same RPM signal as `120`, slower. Our data does not support this — `540` D1,D2 big-endian interpreted as RPM gives idle values of 3500–4400, well above this bike's true idle (~1700 RPM, confirmed via `120` D0,D1). `540` D1 in our data is thermally-correlated but doesn't behave like RPM. **Best read: Husqvarna's `540` does not carry a second RPM copy at D1,D2** — the byte is something else (possibly a thermal correction parameter or idle-stability metric).
 - **`12B`, `290`**: not present on our bus.
 
-### Constants that match
+### Constants that match (and one that doesn't)
 
 - `129` D0 = 0x00 throughout idle (matches "gear=neutral=0", "clutch out=0").
-- `540` D3 = 0x00 throughout idle (matches "gear=neutral=0").
-- `540` D4 = 0x00 throughout idle (matches "kickstand=down=0" per KTM's encoding, *and* the bike was on its side stand during captures).
+- `540` D3 hi nibble: KTM expects gear here as a redundant copy. Refuted on Husqvarna — D3 lo nibble does not carry gear ([[signal-gear-position]]), and D3 bit 0 carries the side-stand state ([[signal-side-stand]]). The hi nibble is LOW-CARD(4) at engine-on idle; identity unknown.
+- `540` D4 = 0x00 throughout idle and across the side-stand toggle capture (matches KTM's "kickstand=down=0" *value*, but Husqvarna doesn't store the kickstand bit here — it's at D3 bit 0 instead; D4 is something else, currently observed as static-zero).
 
 ## Notes on style differences
 
 Bosch ECUs for KTM/Husqvarna platforms ~2020 era share the message scheduler (so IDs and periods carry over), but the payload byte assignments are per-variant. The ktm-can author's caveat ("only verified on my 2020 KTM 690 Enduro R") is exactly the right frame: treat their work as a high-quality prior for the search, not as ground truth.
+
+### Patterns observed so far
+
+- **`540` byte layout is shifted one byte earlier on Husqvarna.** Coolant temp (KTM D6,D7 → Husq D5,D6) and side stand (KTM D4 bit 0 → Husq D3 bit 0) both moved by exactly -1. Worth using as a starting hypothesis when probing the next `540` signal.
+- **Polarity preservation.** Every Husqvarna signal verified against a KTM hypothesis so far has preserved KTM's polarity (engine RPM, throttle position, gear, coolant temp, kill switch, side stand). No inverted-polarity case has surfaced yet — but the kill-switch case (location moved to a different ID entirely) shows that "polarity preserved" doesn't imply "byte position preserved".
 
 ## Citation
 
