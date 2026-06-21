@@ -4,9 +4,10 @@ status: confirmed
 established_by:
   - 2026-06-17-engine-idle-baseline-x3
   - 2026-06-18-kill-switch-toggle
+  - 2026-06-21-cold-boot-id-emergence
 ---
 
-# Post-kill decay groups — at least two source modules
+# Post-kill decay groups + boot-order sub-grouping — at least four source modules
 
 When the kill switch goes to STOP, the 11 always-on broadcast IDs do not stop transmitting at the same time. They cleanly split into two groups by how quickly their last frame appears after the kill toggle:
 
@@ -17,13 +18,24 @@ When the kill switch goes to STOP, the 11 always-on broadcast IDs do not stop tr
 
 The split is exactly 5 vs 6, with the same IDs on each side every run.
 
-This is the first observed evidence that the 11-ID always-on broadcast set originates from **at least two physically distinct modules** — modules that lose CAN-bus broadcasting capability on different timescales when the kill switch breaks the engine-run circuit. A single module would shed all of its IDs together.
+This shows the 11-ID always-on broadcast set originates from **at least two physically distinct modules** with different post-kill power-rail decay timescales. But the boot-order analysis ([[2026-06-21-cold-boot-id-emergence]]) refines this further — the Slow group itself splits into three distinct boot waves, so the bus is sourced by **at least four modules**, not two:
+
+| Sub-group | IDs                                | Boot wave (median first-seen) | Decay tail |
+|-----------|------------------------------------|------------------------------:|-----------:|
+| F         | `120`, `121`, `129`, `540`, `5B0`  |        188 ms (±1 ms)         |   <1 s     |
+| S-early   | `12D`, `12E`                       |    153 ms, 180 ms             |   5–6 s    |
+| S-mid     | `12A`, `5A0`                       |    202 ms, 253 ms             |   5–6 s    |
+| S-late    | `541`, `450`                       |    388 ms, 424 ms             |   5–6 s    |
+
+The 5 Fast-group IDs first-seen offsets cluster within 1 ms of each other across all 4 cold-boot windows — tighter than any single ID's broadcast period. That is the signature of one module broadcasting all 5 IDs after a single boot completion. The three Slow-group sub-waves are separated by 50–150 ms gaps — far wider than any individual ID's period — so they cannot be the same module.
+
+The Fast/Slow decay-tail dichotomy still holds and is unrelated to boot timing: Slow's earliest member (`12D`) boots *before* every Fast-group member, yet still sits on a slow-decay rail. Decay grouping is about the post-kill power supply, boot grouping is about each module's startup sequence.
 
 **Engine state at kill-time doesn't matter.** Both the engine-on case ([`2026-06-17-engine-idle-baseline-x3`](../../experiments/2026-06-17-engine-idle-baseline-x3.md), three runs) and the engine-off case ([`2026-06-18-kill-switch-toggle`](../../experiments/2026-06-18-kill-switch-toggle.md), three STOP windows) show the same grouping and the same Fast-group sub-second tail. What triggers the decay is the kill switch going to STOP, not the engine stopping. (The engine-off tails extend to ~1 s rather than 0.31 s, but every frame in every STOP window of the kill-toggle capture landed in the first second after the toggle — seconds 1–5 were flat zero. Whether the upper tail genuinely runs out to ~1 s engine-off vs. ~0.31 s engine-on, or whether it's bin-edge / sample-size noise, isn't worth a follow-up at this point.)
 
 ## What this is *not* a finding for (yet)
 
-- **Module identification.** "Fast" probably corresponds to a module on the engine-management / charging side of the harness — something whose supply is tied closely to the running engine — and "Slow" probably corresponds to a module on a keep-alive or buffer-capacitor rail (instrument cluster, body controller, ABS module are all candidates). This is hypothesis, not finding. The CAN traffic alone can't tell us which physical module a given ID comes from.
+- **Module identification.** "Fast" probably corresponds to a module on the engine-management / charging side of the harness — something whose supply is tied closely to the running engine. "S-early", "S-mid", and "S-late" probably correspond to three different modules on a keep-alive or buffer-capacitor rail — candidates per sub-group include ABS module (S-early?), body controller (S-mid?), and instrument cluster (S-late?), but the assignment is hypothesis, not finding. The CAN traffic alone can't tell us which physical module a given ID comes from.
 - **Sub-100 ms behaviour.** The captured decay tails are 6 – 10 s long. We have no direct view of what happens in the first ~50 ms after kill at sub-frame-period granularity — could be a graceful shutdown sequence, could be sudden loss-of-power, indistinguishable from the data we have.
 
 ## Why this matters

@@ -32,9 +32,11 @@ The payload-diff experiment ([`2026-06-17-payload-diff-idle`](../../experiments/
 
 Both were confirmed by cross-referencing the [ktm-can decoder](../../references/ktm-can-decoder.md) for the 2020 KTM 690 Enduro R (same Bosch ECU family) and verifying values against our captures (idle RPM ~1700, coolant climbing from ~26 °C cold to 85.5 °C operating temp across the three idle runs). Per-input experiments will add more.
 
-## Post-kill decay reveals at least two source modules
+## Post-kill decay + boot order reveal at least four source modules
 
-The 11 IDs do **not** stop broadcasting uniformly after kill. They cleanly split into two groups by post-kill timing — see the atomic finding at [`docs/findings/can/post-kill-decay-groups.md`](post-kill-decay-groups.md). The fact that the split is exactly 5 vs 6 every run, with the same IDs on each side, is the first observed evidence that this 11-ID set is sourced from at least two physically distinct modules.
+The 11 IDs do **not** stop broadcasting uniformly after kill, and they do **not** all appear at boot at the same time. The combined analysis — Fast/Slow decay split plus three distinct Slow-group boot waves — puts the bus at ≥4 source modules. See [[post-kill-decay-groups]] for the sub-grouping table.
+
+**The 11 always-on IDs are the complete bus inventory at idle.** Across all 4 cold-boot windows checked ([[2026-06-21-cold-boot-id-emergence]]), zero one-shot or boot-only IDs appeared — no module emits a "hello" frame and goes silent. Any new ID surfaced by a future per-input capture is genuinely input-driven, not an undocumented boot frame.
 
 ## Status
 

@@ -2,7 +2,7 @@
 
 **Phase:** 1 — CAN logger / capture inventory.
 
-**Last updated:** 2026-06-19 (side-stand toggle — `540` D3 bit 0 confirmed, KTM `540` D4 bit 0 refuted; second `540` -1-byte shift after coolant temp)
+**Last updated:** 2026-06-21 (desk-batch complete: engine-state bit attribution, D7 byte character, cold-boot ID emergence. Headlines: bus has ≥4 source modules with clean F/S-early/S-mid/S-late sub-grouping; D7 is a universal 6-cycle with per-ID XOR offsets — standard CRC-8 refuted; engine-state bits flat across 174 s of key-on-no-engine.)
 
 ## Hardware on hand
 
@@ -27,12 +27,13 @@
 - Findings established:
   - [`findings/can/bitrate.md`](findings/can/bitrate.md) — 500 kbps, classic CAN, 11-bit IDs.
   - [`findings/can/always-on-broadcast-ids.md`](findings/can/always-on-broadcast-ids.md) — `confirmed`. 11 IDs in 10/20/50/100 ms cohorts; ID set invariant with engine state.
-  - [`findings/can/post-kill-decay-groups.md`](findings/can/post-kill-decay-groups.md) — `confirmed`. Clean 5-vs-6 split (Fast: `120`, `121`, `129`, `540`, `5B0`; Slow: `12A`, `12D`, `12E`, `450`, `541`, `5A0`).
+  - [`findings/can/post-kill-decay-groups.md`](findings/can/post-kill-decay-groups.md) — `confirmed`. Clean 5-vs-6 decay split (Fast: `120`, `121`, `129`, `540`, `5B0`; Slow: `12A`, `12D`, `12E`, `450`, `541`, `5A0`). Boot-order analysis ([[2026-06-21-cold-boot-id-emergence]]) refines this further: Fast group is **one module** (all 5 IDs first-seen within ±1 ms); Slow group splits into 3 boot waves (S-early: `12D`/`12E`; S-mid: `12A`/`5A0`; S-late: `541`/`450`). Bus has **≥4 source modules**, not 2. Zero one-shot IDs at boot — the 11 always-on IDs are the complete bus inventory at idle.
   - [`findings/can/signal-rpm.md`](findings/can/signal-rpm.md) —`confirmed`. Engine RPM at `120` D0,D1 big-endian uint16. Idle ~1700 RPM.
   - [`findings/can/signal-coolant-temp.md`](findings/can/signal-coolant-temp.md) — `confirmed`. Coolant temp at `540` D5,D6 big-endian uint16 ÷10 °C. Range verified 25 °C → 92 °C.
   - [`findings/can/signal-kill-switch.md`](findings/can/signal-kill-switch.md) — `confirmed`. Kill switch at `541` D2 bit 4 (1=run, 0=stop). KTM polarity preserved, location moved (KTM placed it on `120` D3 bit 4). Same capture generalises [[post-kill-decay-groups]]: Fast group decays sub-second whenever kill→STOP, engine-on or engine-off.
   - [`findings/can/signal-throttle-position.md`](findings/can/signal-throttle-position.md) — `confirmed`. Throttle position at `120` D2 uint8, range 0–254 (not 255). KTM byte position transfers exactly. Refuted: `12A` D0 bit 1 is not the throttle-open flag.
-  - [`findings/can/byte-d7-checksum-hypothesis.md`](findings/can/byte-d7-checksum-hypothesis.md) — `confirmed` as an observation. D7 on 9 of 11 always-on IDs behaves like a checksum/hash over D0..D6: 6 unique values on static-payload IDs, 100+ on active-payload IDs. Algorithm not yet reproduced.
+  - [`findings/can/byte-d7-checksum-hypothesis.md`](findings/can/byte-d7-checksum-hypothesis.md) — `confirmed`. D7 = `cycle[counter mod 6] ⊕ per_ID_offset ⊕ f(D0..D6)`. Universal 6-element reference cycle `{0x35,0x5F,0x6A,0x8B,0xBE,0xD4}` (Gray-code in `{0x35,0x6A,0xE1}` XOR basis); per-ID offsets cataloged for 8 of 9 candidate IDs. Standard-CRC + counter-byte exhaustively refuted — algorithm has a hidden input (DataID, LFSR seed, or per-ID secret). Replay-style TX viable; novel-payload TX blocked until algorithm reproduced.
+  - [`findings/can/engine-state-bits-decay-shape.md`](findings/can/engine-state-bits-decay-shape.md) — `provisional`. The 5 engine-state bits flagged by `payload_diff` (3 on `121`, 2 on `540`) hold engine-off mode flat across 174 s of key-on-no-engine (cold-boot) and hold idle mode through the Fast-group post-kill tail (<300 ms). None is a fast "engine-running" indicator — use [[signal-rpm]] for that. "Engine-run permission" and "key-on latch" framings ruled out; residual question is which sensor sources each bit (needs external mapping or hardware probing).
   - [`findings/can/signal-gear-position.md`](findings/can/signal-gear-position.md) — `partial`. Gear at `129` D0 hi nibble; N=0, 1=1 **confirmed**. Gears 2–6 (`0x2`–`0x6`) hypothesised per KTM mapping but unverified — engine-off shift on paddock stand could not engage above 1st. KTM redundant broadcast at `540` D3 lo nibble **refuted** (static `0x0`).
   - [`findings/can/signal-side-stand.md`](findings/can/signal-side-stand.md) — `confirmed`. Side-stand state at `540` D3 bit 0 (1=up, 0=down). KTM polarity preserved; location shifted -1 byte from KTM's D4. Second `540` -1-byte shift after coolant temp — pattern: "`540` byte positions shift one earlier on Husqvarna, polarity intact" is now load-bearing for future `540` hypotheses.
   - [`findings/bike/dash-warning-lights.md`](findings/bike/dash-warning-lights.md) — check-engine extinguishes ~1 s after engine start; ABS extinguishes once speed exceeds ~6 km/h.
@@ -43,7 +44,15 @@
 
 - Nothing — choose any item from "Next actions" below.
 
-## Next actions — per-input experiments (Phase 1 main work)
+## Next actions
+
+Desk follow-ups from the engine-state bit attribution still on the queue:
+
+- ~~**Doc 2 of the desk batch** — D7 algorithm + `12D` character.~~ Done. See [[byte-d7-checksum-hypothesis]].
+- ~~**Doc 3 of the desk batch** — cold-boot ID emergence.~~ Done. See [[post-kill-decay-groups]] (now F/S-early/S-mid/S-late) and [[always-on-broadcast-ids]] (boot inventory closed).
+- ~~**`120` cycle close-out.**~~ Done. Offset = `0x00` (same as `12D`). Triggered an extended algorithm-reproduction attempt (Parts I/J of [[2026-06-21-d7-byte-character]]) — refuted the "no per-ID secret" hypothesis: f(D0..D6) is not a standard CRC-8 in any byte order with any polynomial. Algorithm stays open; remaining angles are external (read other open-source decoders or the ECU binary).
+
+## Per-input experiments (Phase 1 main work)
 
 The payload-diff has narrowed the search space dramatically. Each remaining signal has a KTM hypothesis at a specific (ID, byte/bit) location and a residual ~20–40 candidate bytes per ID after subtracting STATIC/LOW-CARD-stationary. Pick from these:
 
