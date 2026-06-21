@@ -3,11 +3,12 @@ area: can
 status: confirmed
 established_by:
   - 2026-06-18-kill-switch-toggle
+  - 2026-06-21-bit-transition-scan
 references:
   - ktm-can-decoder
 ---
 
-# Kill switch (run/stop) — `541` byte D2 bit 4
+# Kill switch (run/stop) — `541` byte D2 bit 4 (primary)
 
 Kill-switch state on the 2020 Husqvarna Svartpilen 401 is broadcast in arbitration ID **`0x541`**, byte **D2**, **bit 4** (LSB-numbered, so mask `0x10`):
 
@@ -51,9 +52,22 @@ The Fast-group counts are the **same post-kill decay tail** documented in [[post
 - [`logs/2026-06-19-kill-switch-toggle/`](../../../logs/2026-06-19-kill-switch-toggle/) — raw capture.
 - [`scripts/kill_switch_scan.py`](../../../scripts/kill_switch_scan.py) — window-aware bit scan that surfaced the hit.
 
+## Secondary broadcast locations
+
+[[2026-06-21-bit-transition-scan]] found the same kill-toggle signature (exactly 6 toggles, lockstep with the 6 kill events) on two additional bits:
+
+| location          | toggles in kill session | other sessions | notes |
+|-------------------|------------------------:|---------------:|-------|
+| `541` D2 bit 4    | 6 (primary)             | 0              | the canonical signal — use this in firmware |
+| `5B0` D0 bit 4    | 6                       | 0              | independent broadcast, same polarity hypothesis (1=run, 0=stop). `5B0` is Fast-group; this is the first non-`541` kill carrier observed |
+| `121` D5 bit 2    | 6                       | 0              | second Fast-group carrier. Bit 3 of the same byte is the engine-state indicator from [[engine-state-bits-decay-shape]], so D5 packs at least two independent state bits |
+
+The three locations toggle on the same edges in the kill-toggle capture. Plausible cause: each broadcasting module maintains its own local copy of the kill input rather than depending on a cross-module broadcast — typical for safety-critical signals. Practically, `541` D2 bit 4 remains the right source for the dashboard (Slow-group, broadcasts steadily across both kill states); the others are redundant. Worth confirming polarity on `5B0` D0 bit 4 and `121` D5 bit 2 in a future capture where the bus is sampled across a longer steady-state in each kill position.
+
 ## Open
 
 - Confirm at higher temperatures / with engine running. The signal at `541` D2 bit 4 is asserted at key-on and tracks the physical switch with the engine off; an engine-on STOP press (which kills a running engine) is a different functional path and may or may not use the same bit.
 - Other bits of `541` D2: the byte was not exhaustively characterised. Worth a fresh idle-vs-state scan with several inputs varied.
+- Verify polarity of `5B0` D0 bit 4 and `121` D5 bit 2 in a steadier capture.
 
 See also: [[always-on-broadcast-ids]], [[post-kill-decay-groups]], [[ktm-can-decoder]].

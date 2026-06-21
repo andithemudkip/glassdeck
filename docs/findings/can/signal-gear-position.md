@@ -27,13 +27,11 @@ gear_nibble = (data[0] >> 4) & 0x0F
 
 The N=0 and 1=1 mappings were observed cleanly across all sampled windows of the Phase B gear-cycle capture (purity 100% in the held-N windows; purity ~90% in the 1st-gear window, the remainder explained by 1 s of shift-mechanics settling). Gears 2–6 were not reached: with the engine off on a paddock stand, the gearbox dogs do not align well enough to engage gears above 1st. The KTM-style `gear == integer` encoding is the standing hypothesis for 2–6 and the natural reading given how cleanly 0 and 1 fall out.
 
-The low nibble of `129` D0 stayed `0x0` in every observed window; no clutch / shift-state bits are co-encoded in this byte on Husqvarna (separate Phase A null result for clutch — see [Open](#open)).
+The low nibble of `129` D0 stayed `0x0` in every observed *held-gear* window — but follow-up alignment of the Phase B trace ([[signal-shift-lever]]) shows the lo nibble carries **shift-lever sensor** state, not gear state: bit 3 = lever displaced from rest (sustained), bit 1 = shift attempt failed to engage target gear (transient). The dashboard `-` glyph discussed below is most likely sourced from bit 1, not from a separate sensor as previously hypothesised.
 
 ## What the dash "-" means
 
-When the bike physically cannot resolve a gear (e.g., a shift-lever push that didn't actually engage a gear), the dash shows `-`. On the CAN bus, `129` D0 hi nibble reads `0x0` (neutral) during these "-" episodes — there is **no transition / unknown sentinel value** in this field. The `-` glyph is computed cluster-side, almost certainly from a separate shift-lever-position sensor that is not bridged onto the diagnostic-port CAN stub.
-
-Practical consequence for the dashboard MVP: this nibble alone does not let us distinguish "in neutral" from "shift attempted but not engaged". If we want to mirror the OEM `-` behaviour we will need either (a) a second signal that the cluster uses, or (b) a heuristic ("`129` D0 read 0 while engine running and the rider toggled the shift lever recently").
+When the bike physically cannot resolve a gear (e.g., a shift-lever push that didn't actually engage a gear), the dash shows `-`. On the CAN bus, `129` D0 **hi** nibble reads `0x0` (neutral) during these "-" episodes — the gear field itself has no transition / unknown sentinel value. But the **lo** nibble does carry a failed-shift flag — see [[signal-shift-lever]] for bit 1's signature, which fires shortly after the failed N→2 attempts in Phase B. The dashboard MVP can almost certainly mirror the OEM `-` by watching `129` D0 bit 1 directly, with no separate sensor required. Needs engine-on confirmation.
 
 ## Cross-walk vs KTM
 

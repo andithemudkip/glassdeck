@@ -4,6 +4,8 @@ status: provisional
 established_by:
   - 2026-06-17-payload-diff-idle
   - 2026-06-21-engine-state-bit-attribution
+  - 2026-06-21-cross-session-payload-diff
+  - 2026-06-21-bit-transition-scan
 ---
 
 # Engine-state bits hold through Fast-group decay — they are not fast engine-running indicators
@@ -30,13 +32,31 @@ For dashboard logic, **none of these bits is a usable "engine running" indicator
 
 ## What the data rules out
 
-The bit's value is not determined by anything we can manipulate without actually running the engine:
+The bit's value is not determined by anything we can manipulate without actually running the engine (with the partial-exception of the two `540` bits — see below):
 
-- **Not "engine-run permission" (key + kill both in run).** In cold-boot, key is on and kill is in run, but the bit reads engine-off mode. So whatever the bit sources, it requires more than just the engine-run circuit being electrically alive.
 - **Not a "key-on latch."** A latch set at key-on would already be at idle mode through cold-boot. It isn't.
 - **Not "module power-rail status."** The host module is broadcasting normally for the full 174 s with the bit at engine-off mode — the bit is determined by something downstream of the module being powered.
 
-The bit genuinely changes only when the engine **physically runs**. Off → idle on engine start; never observed to revert before the host ID falls silent on the Fast-group tail.
+For the three `121` bits, the data is consistent only with the bit changing on engine physical-run. None of the engine-off per-input sessions (throttle, kill, stand, clutch, gear) move them. The `121` bits never revert before the host ID falls silent on the Fast-group tail.
+
+The two `540` bits behave differently from the `121` bits — see "kill-correlated subset" below.
+
+## Kill-correlated subset — `540` D2 bit 6 and `540` D3 bit 4
+
+[[2026-06-21-cross-session-payload-diff]] surfaced a refinement specific to the two `540` bits. In the engine-off kill-switch toggle session, both bits briefly drop to their idle-mode value during kill→STOP edges:
+
+- `540` D2 dominant = `0x40` in all 6 engine-off sessions, dominant = `0x00` in all 3 engine-on idle sessions, but the kill session shows 12 transient frames of `0x00` out of 587 — coincident with kill toggles.
+- `540` D3 shows 9 transient frames of `0x00`/`0x01` (bit 4 clear) out of 587 in the kill session — same pattern.
+
+This refines these two bits from "pure engine-state" to **"ignition-armed permission" indicators**: high when key-on AND kill in run AND engine running; low when *any* of those conditions drops. Cold-boot held them high because kill was in run and the engine *had not stopped*; the engine-running condition appears to be a one-way latch — once asserted by an engine cycle, it holds across the session unless a kill→STOP transition resets it. The three `121` bits are not affected: they hold their engine-off mode rock-solid through the kill session.
+
+This means the bit's character is bit-specific, not ID-specific. Two of the five flagged bits are kill-sensitive (the `540` ones); three are not (the `121` ones).
+
+## Methodology note — bit-level toggle scanning has a blind spot here
+
+[[2026-06-21-bit-transition-scan]] ran a bit-level toggle-rate scan against the same corpus and **did not** reproduce four of the five engine-state bits (it found `121` D5 bit 3 as GLOBAL-CONSTANT, the `540` bits as MIXED). The reason is structural: the bits flip at engine-start and engine-stop only, and the scan's per-session window is `idle_settled → kill` — both transitions are outside it. Within the steady idle window the bit has zero toggles, and the engine-off windows also have zero toggles in any session, so the activity-count classifier sees "globally constant."
+
+The byte-level cross-session diff catches the same bits via *dominant-value differences across sessions*, which is the right tool for "bit that latches once at engine start." Treat this table (and the byte-level engine-state map) as authoritative for these five bits; the bit-transition scan is the right tool for bits that toggle *during* the captured window (kill, stand, shift, throttle).
 
 ## Residual question: which sensor sources each bit?
 
