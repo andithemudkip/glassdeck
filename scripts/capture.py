@@ -337,6 +337,27 @@ def main() -> int:
              "suppressed them (ADR 0007). Orthogonal to --show-d7.",
     )
     parser.add_argument(
+        "--byte-activity-window-secs",
+        type=float,
+        default=2.0,
+        help="Rolling window over which a byte's short_range is computed for "
+             "the active-unknown-bytes pane (ADR 0008).",
+    )
+    parser.add_argument(
+        "--byte-activity-ratio",
+        type=float,
+        default=3.0,
+        help="Multiplicative threshold over each byte's EWMA baseline range "
+             "before it surfaces in the active-unknown-bytes pane (ADR 0008).",
+    )
+    parser.add_argument(
+        "--byte-activity-hysteresis-secs",
+        type=float,
+        default=3.0,
+        help="How long a byte must stay quiet before leaving the "
+             "active-unknown-bytes pane, preventing edge flicker (ADR 0008).",
+    )
+    parser.add_argument(
         "--experiment",
         type=Path,
         default=None,
@@ -542,6 +563,9 @@ def main() -> int:
                 anomaly_warmup_flips=args.anomaly_warmup_flips,
                 discovery_retention_secs=args.discovery_retention_secs,
                 show_suppressed=args.show_suppressed,
+                byte_activity_window_secs=args.byte_activity_window_secs,
+                byte_activity_ratio=args.byte_activity_ratio,
+                byte_activity_hysteresis_secs=args.byte_activity_hysteresis_secs,
             )
 
             worker = threading.Thread(

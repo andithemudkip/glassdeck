@@ -20,6 +20,9 @@ from signals import Signal, by_id
 
 from .bridge import LiveBridge
 from .constants import (
+    ACTIVE_BYTES_PANE_ROWS,
+    ACTIVITY_EWMA_ALPHA,
+    BASELINE_FLOOR,
     DECODED_REFRESH_HZ,
     DISCOVERY_PANE_ROWS,
     EWMA_ALPHA,
@@ -33,10 +36,12 @@ from .modals import LegendScreen, UnpinModal, WatchModal
 from .screens import AnalysisScreen, OperatorScreen
 from .state import (
     BaselineStats,
+    ByteActivityStats,
     GroupedRow,
     WatchPin,
     _render_group_row,
     _signed_secs,
+    classify_byte,
     sparkline,
 )
 
@@ -69,6 +74,9 @@ class LiveView(App):
         anomaly_warmup_flips: int = 5,
         discovery_retention_secs: float = 60.0,
         show_suppressed: bool = False,
+        byte_activity_window_secs: float = 2.0,
+        byte_activity_ratio: float = 3.0,
+        byte_activity_hysteresis_secs: float = 3.0,
     ) -> None:
         # session_dir=None is the --watch path: render-only, no disk writes.
         super().__init__()
@@ -80,6 +88,7 @@ class LiveView(App):
         # immutable for the session, so cache it instead of rebuilding on
         # every render.
         self._bit_index = self._compute_bit_index()
+        self._byte_index = self._compute_byte_index()
         self.events_log = events_log
         self.hotkeys = hotkeys
         self.legend_text = legend_text
@@ -120,6 +129,12 @@ class LiveView(App):
         ] = deque(maxlen=2000)
         # Watch panel pins (UI-only, session-local — see ADR 0007).
         self.watch_pins: list[WatchPin] = []
+
+        # ADR 0008 — per-byte rolling range + EWMA baseline.
+        self.byte_activity_window_secs = byte_activity_window_secs
+        self.byte_activity_ratio = byte_activity_ratio
+        self.byte_activity_hysteresis_secs = byte_activity_hysteresis_secs
+        self.byte_activity: dict[tuple[int, int], ByteActivityStats] = {}
 
         self.snapshot_seq = 0
         self.total_frames = 0
@@ -279,6 +294,12 @@ class LiveView(App):
         for b_idx, val in enumerate(data):
             prev = self.current_bytes.get((arb, b_idx))
             self.current_bytes[(arb, b_idx)] = val
+
+            # (a') Byte-level rolling range + EWMA baseline (ADR 0008).
+            # Runs on every sample (not just transitions) — counters and
+            # held values contribute to the buffer too, so a flat byte's
+            # baseline stays at 0 until the first real sweep.
+            self._update_byte_activity(ts, arb, b_idx, val)
 
             # (a) Continuous detection — only fires on actual transitions.
             if prev is not None and prev != val:
@@ -544,6 +565,45 @@ class LiveView(App):
                     index[(sig.arbitration_id, sig.byte, bit)] = sig.name
         return index
 
+    def _compute_byte_index(self) -> dict[tuple[int, int], str]:
+        """Map every byte touched by any signal (even a single-bit one) to
+        that signal's name. Used by the active-unknown-bytes pane (ADR
+        0008) to exclude named bytes — those belong to the decoded pane."""
+        index: dict[tuple[int, int], str] = {}
+        for sig in self.signals:
+            if sig.bytes_ is not None:
+                for b in sig.bytes_:
+                    index[(sig.arbitration_id, b)] = sig.name
+            elif sig.byte is not None:
+                index[(sig.arbitration_id, sig.byte)] = sig.name
+        return index
+
+    def _update_byte_activity(self, ts: float, arb: int, byte: int, val: int) -> None:
+        """ADR 0008 — append (ts, val) to the per-byte ring buffer, evict
+        old entries past the window, refresh short_range + the long EWMA
+        baseline, and timestamp the byte as active if it currently trips
+        the threshold (consumed by the pane's hysteresis check)."""
+        stats = self.byte_activity.get((arb, byte))
+        if stats is None:
+            stats = ByteActivityStats()
+            self.byte_activity[(arb, byte)] = stats
+        buf = stats.buffer
+        buf.append((ts, val))
+        window = self.byte_activity_window_secs
+        while buf and ts - buf[0][0] > window:
+            buf.popleft()
+        if len(buf) < 2:
+            return
+        lo = min(v for _, v in buf)
+        hi = max(v for _, v in buf)
+        short_range = hi - lo
+        stats.baseline_range_ewma += ACTIVITY_EWMA_ALPHA * (
+            short_range - stats.baseline_range_ewma
+        )
+        threshold = max(BASELINE_FLOOR, self.byte_activity_ratio * stats.baseline_range_ewma)
+        if short_range > threshold:
+            stats.last_active_ts = ts
+
     def _flip_rows(self) -> list[tuple[int, int, int, str, int, float, str, float]]:
         """Per-bit flip rows used by the unknown pane and snapshot JSON."""
         index = self._bit_index
@@ -760,6 +820,73 @@ class LiveView(App):
         ]
         if len(groups) > max_rows:
             body.append(f"  … and {len(groups) - max_rows} more")
+        return header + "\n" + "\n".join(body)
+
+    def active_bytes_text(self) -> str:
+        """Active-unknown-bytes pane (ADR 0008).
+
+        Lists every (arb, byte) currently tripping the rolling-range
+        threshold OR still within the hysteresis tail, sorted by ratio
+        descending. Bytes covered by signals.yaml are excluded — they
+        belong to the decoded pane. D7 is gated by --show-d7 for parity
+        with the bit panes (D7 checksums would dominate)."""
+        now = time.time()
+        header = (
+            f"[bold]Active unknown bytes[/bold]  "
+            f"[dim](window {self.byte_activity_window_secs:.1f}s, "
+            f"ratio ≥ {self.byte_activity_ratio:.1f}×)[/dim]"
+        )
+        rows: list[tuple[float, int, int, int, float, float, bool]] = []
+        for (arb, byte), stats in self.byte_activity.items():
+            if (arb, byte) in self._byte_index:
+                continue
+            if byte == 7 and not self.show_d7:
+                continue
+            buf = stats.buffer
+            if len(buf) < 2:
+                continue
+            lo = min(v for _, v in buf)
+            hi = max(v for _, v in buf)
+            short_range = hi - lo
+            threshold = max(
+                BASELINE_FLOOR, self.byte_activity_ratio * stats.baseline_range_ewma
+            )
+            active_now = short_range > threshold
+            in_tail = (
+                stats.last_active_ts is not None
+                and now - stats.last_active_ts < self.byte_activity_hysteresis_secs
+            )
+            if not (active_now or in_tail):
+                continue
+            cur = self.current_bytes.get((arb, byte), 0)
+            first_activity = stats.baseline_range_ewma <= BASELINE_FLOOR
+            if first_activity:
+                ratio = math.inf
+            else:
+                ratio = short_range / stats.baseline_range_ewma
+            rows.append((ratio, arb, byte, cur, short_range, stats.baseline_range_ewma, first_activity))
+        if not rows:
+            return header + "\n  (idle — no anonymous byte currently sweeping)"
+        rows.sort(key=lambda r: -r[0])
+        max_rows = ACTIVE_BYTES_PANE_ROWS - 2
+        body: list[str] = []
+        for ratio, arb, byte, cur, short_range, _ewma, first in rows[:max_rows]:
+            buf_vals = [v for _, v in self.byte_activity[(arb, byte)].buffer]
+            spark = sparkline([float(v) for v in buf_vals])
+            ratio_str = "∞" if math.isinf(ratio) else f"{ratio:.1f}×"
+            # First-activity wins the trailing slot — it's more useful than a
+            # shape label in that moment (see ADR 0008 §6).
+            if first:
+                suffix = "  [dim](first activity)[/dim]"
+            else:
+                shape = classify_byte(buf_vals)
+                suffix = f"  [dim]{shape}[/dim]" if shape else ""
+            body.append(
+                f"  0x{arb:03X} D{byte}   value={cur:>3} / 0x{cur:02X}   "
+                f"{spark}   range {int(short_range):>4}   ratio={ratio_str}{suffix}"
+            )
+        if len(rows) > max_rows:
+            body.append(f"  … and {len(rows) - max_rows} more")
         return header + "\n" + "\n".join(body)
 
     def status_text(self, extra: str = "") -> str:

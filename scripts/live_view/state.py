@@ -29,6 +29,23 @@ class BaselineStats:
 
 
 @dataclass(slots=True)
+class ByteActivityStats:
+    """Per-byte rolling range + EWMA baseline (ADR 0008).
+
+    `buffer` keeps the last ~ACTIVITY_WINDOW_SECS of (ts, value) samples
+    — sized by time, evicted from the left at update. `short_range` is
+    recomputed from the buffer; `baseline_range_ewma` is the long-running
+    smooth of short_range. The first sweep on a previously-flat byte
+    trips against a baseline near 0, so ratio jumps to ∞ against
+    BASELINE_FLOOR — rare-but-real activity surfaces for free, no
+    warmup escape hatch required (unlike the bit-flip case)."""
+
+    buffer: deque[tuple[float, int]] = field(default_factory=deque)
+    baseline_range_ewma: float = 0.0
+    last_active_ts: float | None = None
+
+
+@dataclass(slots=True)
 class GroupedRow:
     """One arbitration ID's worth of anomalous bit-flips, ready to render.
 
@@ -148,6 +165,32 @@ def _render_group_row(g: GroupedRow, time_label: str) -> str:
         f"  0x{g.arb:03X}  {g.render_bits()}  {bits_label}  {trans}  "
         f"{time_label:>7}  {score}"
     )
+
+
+def classify_byte(values: Sequence[int]) -> str:
+    """Coarse one-word shape guess for the byte's recent buffer (ADR 0008 §6).
+
+    Heuristic only — labels are a hint, not a verdict. Anything that
+    doesn't cleanly fit a bucket returns "" (the sparkline already
+    shows the shape; a wrong label is worse than none). Counter check
+    runs before step because a 4-distinct monotonic series is a
+    counter near rollover, not a 4-state machine."""
+    if len(values) < 4:
+        return ""
+    distinct = set(values)
+    if len(distinct) < 2:
+        return ""
+    if len(distinct) == 2:
+        return "boolean"
+    deltas = [b - a for a, b in zip(values, values[1:])]
+    # d >= 0 is a normal step; d < -200 is a 0xFF→low wraparound (byte
+    # max delta on wrap is -255). Anything in between is a real backtrack.
+    monotonic = sum(1 for d in deltas if d >= 0 or d < -200)
+    if monotonic >= len(deltas) - 1:
+        return "counter"
+    if len(distinct) <= 5:
+        return "step"
+    return "sensor"
 
 
 def sparkline(samples: Sequence[float], width: int = SPARKLINE_WIDTH, *, boolean: bool = False) -> str:

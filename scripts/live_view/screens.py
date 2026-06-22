@@ -30,6 +30,7 @@ class AnalysisScreen(Screen):
     #flipped-known   { width: 1fr; height: 100%; border: round cyan;   padding: 0 1; }
     #flipped-unknown { width: 1fr; height: 100%; border: round yellow; padding: 0 1; }
     #discovery       { height: 10; border: round magenta; padding: 0 1; }
+    #active-bytes    { height: 12; border: round red;     padding: 0 1; }
     #status          { height: 3;  border: round white;  padding: 0 1; }
     """
 
@@ -43,6 +44,7 @@ class AnalysisScreen(Screen):
                 id="flipped-row",
             ),
             Static("", id="discovery"),
+            Static("", id="active-bytes"),
             Static("", id="status"),
         )
 
@@ -58,6 +60,7 @@ class AnalysisScreen(Screen):
             self.query_one("#flipped-known", Static).update(known_text)
             self.query_one("#flipped-unknown", Static).update(unknown_text)
             self.query_one("#discovery", Static).update(app.discovery_text())
+            self.query_one("#active-bytes", Static).update(app.active_bytes_text())
             self.query_one("#status", Static).update(app.status_text())
         except Exception:
             pass

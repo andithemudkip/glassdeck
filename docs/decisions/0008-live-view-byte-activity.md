@@ -91,6 +91,42 @@ No on-disk artifacts. The pane is pure presentation, like every other panel on `
 
 A natural symmetric extension is a mark-driven byte pane: "which bytes became active in the post-mark window." This is straightforward (snapshot baseline ranges at mark time, list bytes whose post-mark range exceeded threshold), but it's not the gap the user identified — they specifically pointed at "watching values change," which is the continuous case. Defer until a concrete experiment shows the mark-driven byte view would have changed an outcome. Same data is in `capture.log`; post-hoc analysis already handles the offline version.
 
+### 6. Shape label per row
+
+Each row gets a one-word shape guess, computed at render time off the same buffer used for `short_range`. Four labels; anything that doesn't cleanly fit gets no label (sparkline already shows the shape — the label is a hint, not a verdict):
+
+- **boolean** — exactly two distinct values in the buffer. Surfacing here usually means a status byte with a single moving bit; signals the operator to look at it bit-wise (and bit-flip discovery from 0007 will already be showing it).
+- **step** — three to five distinct values, held for periods between changes. Discrete states like gear position.
+- **counter** — deltas between successive samples are non-negative except for occasional large negatives (≥ 200 LSB, treated as 0xFF wraparound). A frame counter or low byte of a 16-bit counter; tells the operator not to look for semantic meaning in the value itself.
+- **sensor** — many distinct values varying smoothly. The canonical case the pane was built for.
+
+Heuristic (paraphrased — exact thresholds live in code):
+
+```python
+def classify_byte(values: Sequence[int]) -> str:
+    if len(values) < 4: return ""
+    distinct = set(values)
+    if len(distinct) == 2: return "boolean"
+    deltas = [b - a for a, b in zip(values, values[1:])]
+    monotonic = sum(1 for d in deltas if d >= 0 or d < -200)
+    if monotonic >= len(deltas) - 1: return "counter"  # counter check before step
+    if len(distinct) <= 5: return "step"
+    return "sensor"
+```
+
+Why heuristic, not learned: buckets are coarse and visually obvious from the sparkline; the label just names what the eye sees. Wrong labels are easy to fix — bump a threshold, ship. A learned model would need training data we don't have and would hide the rule the operator is reasoning about.
+
+The label replaces the trailing `(first activity)` annotation: when both apply, "first activity" wins, since it's the more useful signal in that moment. Labels are decoration only — sort order stays on ratio descending.
+
+Render:
+
+```
+Active unknown bytes
+  0x290 D2   value=187 / 0xBB    [▁▃▅▆▇█▇▆▅▃]   range 142   ratio=23.5×   sensor
+  0x4A1 D5   value=42  / 0x2A    [▔▔▔▔▔▆▇▆▔▔]   range 18    ratio=4.1×    step
+  0x230 D0   value=0   / 0x00    [▁▂▃▂▁_____]   range 6     ratio=∞       (first activity)
+```
+
 ## Consequences
 
 - **The "RPM byte invisible until manually mapped" loop closes.** A sensor-shaped byte announces itself in the live view the moment it sweeps; the operator notices, makes a hypothesis (e.g. "byte D2 of 0x290 tracks throttle"), can immediately design a confirmatory experiment, and adds it to `signals.yaml`. This compresses the discovery loop from "session → post-hoc analysis → next session" to a single session.
@@ -99,7 +135,6 @@ A natural symmetric extension is a mark-driven byte pane: "which bytes became ac
 - **Per-byte state is small.** Per `(arb_id, byte_index)`: one ring buffer of ~30 samples and three scalars. For a bus with ~20 IDs × 8 bytes, that's ~160 bytes-of-state × 30 samples × 8 bytes-per-sample ≈ 40 KB. Negligible.
 - **Anonymous-byte filter depends on `signals.yaml` coverage.** As the project decodes more bytes, the pane naturally shrinks — bytes graduate from "anonymous and active" to "named in the decoded pane." That's a feature: the pane is a live to-do list of "bytes worth investigating next."
 - **No warmup affordance.** Unlike the bit case where a rare bit needs explicit warmup to surface, the range metric handles rare activity naturally (any move from a flat baseline trips the ratio against the floor). Simpler.
-- **Future extension: byte classifier.** A natural follow-on is to annotate each row with a guessed shape — `counter`, `sensor`, `step`, `boolean-ish` — based on the buffer's pattern. Out of scope here; would need either heuristics or a small classifier and warrants its own ADR if it ever clears the bar.
 - **Future extension: pane unification.** If experience shows that "active unknown bytes" and "continuous unknown bits" answer the same operator question often enough, they could merge into one "unknown activity" pane keyed on `(arb_id, byte_index)` with bit annotations inline. Not pre-decided — let usage drive it.
 - **Scope discipline.** This ADR is byte-level activity for the live view only. It is not a plotter, not a frame browser, not a DBC editor, not byte-level mark-driven analysis (deferred above). Each of those is a separate decision if pressure exists.
 - **Implementation touch points.** All inside `scripts/live_view.py`: per-byte ring buffer + EWMA state, updated in the frame handler alongside the per-bit stats from 0007; a new pane in `AnalysisScreen.compose` and a corresponding render method; the existing sparkline helper used unchanged; the `signals.yaml` coverage check (already computed in `_bit_to_signal`) extended to a `_byte_to_signal` index. `capture.py` gains three CLI flags. No changes to `signals.py`, `procedure.py`, or any on-disk format.
