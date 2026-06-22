@@ -32,48 +32,22 @@ All commands below assume the venv is active (`python …`); if you'd rather not
 
 ## Running a capture
 
-With the adapter plugged in and the bike at key-on:
+See **[`CAPTURING.md`](CAPTURING.md)** for the operator's guide — quick start, scenario recipes ("see what flips when I press X"), hotkey reference, live-view panes, and troubleshooting.
+
+The short version:
 
 ```
-python scripts/capture.py --port /dev/cu.usbmodem101 --label key-on
+python scripts/capture.py --port /dev/cu.usbmodem101 --label key-on              # plain
+python scripts/capture.py --port /dev/cu.usbmodem101 --label idle --live         # live TUI
+python scripts/capture.py --port /dev/cu.usbmodem101 --label kill \
+    --experiment docs/experiments/<slug>.procedure.yaml                          # rider-driven
 ```
 
-The script creates `logs/<date>-<label>/`, opens the ESP32-S3 USB-CDC port with `pyserial`, and parses the firmware's SLCAN-formatted line stream directly into `can.Message` objects (see ADR 0004 Update 2026-06-17 for why we don't use `python-can`'s `slcan` interface). The live status line shows elapsed time, frame count, unique IDs, event-mark count.
-
-**Pre-flight on the firmware side.** Even with no CAN bus connected, the can-logger emits `# bus_err=0 rx_missed=0 rx_overrun=0 state=running\r` on the USB-CDC stream every ~2 s. `capture.py`'s SLCAN parser ignores anything that doesn't start with `t/T/r/R`, so these are silently dropped — to see them with your own eyes, sniff the raw port (`pio device monitor -p /dev/cu.usbmodem101 -b 115200` or a one-shot `python -c "import serial; print(serial.Serial('/dev/cu.usbmodem101',115200,timeout=4).read(800).decode())"`). On a healthy bench: status lines flowing, all counters at zero, LED dark. On a live bus: same status lines, LED pulsing dim green (board-dependent — see `firmware/can-logger/README.md`), frames in `capture.log`.
-
-**Hotkeys** during the session (single keypress, no Enter):
-
-| Key | Mark | | Key | Mark |
-|---|---|---|---|---|
-| space | generic mark | | `m` | ROAD/SUPERMOTO toggle |
-| `i` / `I` | indicator L / R | | `r` | trip reset |
-| `b` | high beam | | `t` | throttle blip |
-| `g` | gear shift | | `k` | kill switch |
-| `n` | neutral | | `s` | starter button |
-| `h` | horn | | `?` | print legend |
-| `e` | idle settled | | `q` or Ctrl-C | stop capture |
-| (any other printable key) | recorded raw, label later | | | |
-
-Each keypress lands a timestamped row in `events.csv` with both ISO-UTC and `time.monotonic()` clocks so it can be cross-referenced against capture.log timestamps later.
-
-**On exit** (`q`, Ctrl-C, or USB unplug) the script writes:
-
-- `capture.log` — raw frames, candump format with host timestamps
-- `events.csv` — keystroke marks (and a `disconnect` row if the bus dropped mid-capture)
-- `session.md` — auto-populated header (firmware rev, bitrate, frame/ID counts, start/end timestamps) plus TODOs for bike state, rider narrative, and anomalies. **Fill these in before walking away** — a session without bike state context is half-useless a week later.
-
-**Useful flags:**
-
-- `--bitrate 250000` — metadata only. The value is recorded in `session.md` but is not sent to the adapter; the actual bus rate is fixed by the firmware build you flashed (`-e logger` = 500 kbps, `-e logger-250k` = 250 kbps). Pass the rate that matches the build so session metadata stays truthful.
-- `--label` — becomes the directory suffix. The script refuses to overwrite an existing non-empty `capture.log`, so re-runs need a new label (`key-on-2`, etc.).
-- `--firmware-rev` — override the auto-detected git short hash. Auto-detect uses `git log -n 1 -- firmware/can-logger`; if you've edited firmware without committing, that hash is stale — pass the truth manually.
-
-See `python scripts/capture.py --help` for the full list.
+`capture.py` parses the firmware's SLCAN line stream directly into `can.Message` objects (see ADR 0004 Update 2026-06-17). On exit it writes `capture.log`, `events.csv`, and a `session.md` stub — **fill the stub in** before walking away. See `python scripts/capture.py --help` for the full flag list.
 
 ## Dependencies
 
-Listed in `requirements.txt` (`python-can`, `pyserial`). Install with the venv command above.
+Listed in `requirements.txt` (`python-can`, `pyserial`, `textual`, `PyYAML`). Install with the venv command above.
 
 ## Catalog
 
@@ -92,5 +66,5 @@ Listed in `requirements.txt` (`python-can`, `pyserial`). Install with the venv c
 - `cross_session_diff.py` — extends `payload_diff.py` from the 3 idle baselines to the full 9-session corpus (cold-boot, 3 idle runs, throttle, kill, side-stand, clutch-only, gear-cycle). For each (ID, byte) across the 11 always-on IDs, computes a per-session movement profile (dominant value, distinct count, purity, "moves" flag) and classifies as GLOBAL-STATIC / ENGINE-STATE / SINGLE-CAUSE(session) / MULTI-CAUSE / CROSS-DRIFT. D7 byte excluded from the main table (per [[byte-d7-checksum-hypothesis]] D7 churns deterministically) and printed in its own per-ID distinct-count grid. Known-signal reproduction check derives its coordinates from `docs/signals/signals.yaml` via `scripts/signals.py` (ADR 0005); a confirmed-signal byte that classifies as GLOBAL-STATIC is flagged as FAIL. Candidate short list filters out the schema coordinates. `--csv` writes `cross_session_classification.csv` for downstream tools. Hard-coded session list — read the top of the file to point it at new captures.
 - `bit_transition_scan.py` — bit-level companion to `cross_session_diff.py`. Computes per-(ID, byte, bit) toggle counts across each session (704 bits before D7 exclusion) and classifies each bit as GLOBAL-CONSTANT / CHECKSUM-LIKE / SESSION-CONTRAST / ENGINE-CONTRAST-FAST / ENGINE-CONTRAST-SLOW / NEAR-CONSTANT / MIXED. Uses an **activity-count** rule (a session is "active" if the bit toggled ≥2 times) rather than a rate threshold — critical for catching slow flag bits like kill switch (6 toggles in a 75 s session = 0.002 rate, well below any reasonable threshold). D7 bits filtered out of the main hunt (printed separately as a sanity check — expected to land in CHECKSUM-LIKE per `byte-d7-checksum-hypothesis`). Pass `--include-d7` to include them. Known-signal reproduction check is split: schema-sourced bits (from `docs/signals/signals.yaml`) flagged FAIL on GLOBAL-CONSTANT, and a literal "unattributed bit study targets" list for hypotheses not yet promoted. Reuses session list and window logic from `cross_session_diff.py`.
 - `signals.py` — canonical schema loader for `docs/signals/signals.yaml` (per ADR 0005). Exposes a frozen `Signal` dataclass with `extract(arbitration_id, data)` / `format(value)` helpers, plus `load_signals()`, `lookup(signals, name)`, `by_id(signals)`, and the byte/bit coordinate helpers (`byte_coords`, `bit_coords`) consumed by the decoder-script self-checks. Run as a script to print every schema entry with its decoded location string.
-- `live_view.py` — Textual TUI used only by `capture.py --live`. Owns the per-frame decode state, the flipped-since-mark tracker (snapshot baseline at every event mark, observe bit transitions for 500 ms), and the `live_decode.csv` writer. Decodes using `scripts/signals.py` directly so live and post-hoc views can never drift. `LiveBridge` is the thread-safe queue between the capture worker thread (frame producer) and the Textual main thread (UI + keyboard).
+- `live_view/` — Textual TUI used only by `capture.py --live`. Owns the per-frame decode state, the flipped-since-mark tracker (snapshot baseline at every event mark, observe bit transitions for 500 ms), and the `live_decode.csv` writer. Decodes using `scripts/signals.py` directly so live and post-hoc views can never drift. `LiveBridge` is the thread-safe queue between the capture worker thread (frame producer) and the Textual main thread (UI + keyboard). Internally split into `app.py` (the `LiveView` App), `screens.py` (analysis + operator views), `modals.py` (legend/watch/unpin overlays), `state.py` (per-bit baselines + render helpers), `bridge.py` (`LiveBridge`), `constants.py`, `__init__.py` (re-exports).
 - `verify_signals.py` — schema self-test. Walks a known-good idle capture (default: `logs/2026-06-17-engine-idle-run-3`), decodes every signal in `signals.yaml`, and asserts every `confirmed` entry sits inside the range its finding documents. Use `--session` to point at any other session that has both `capture.log` and `events.csv`. Exits non-zero on FAIL — runs in CI / pre-promotion checks.

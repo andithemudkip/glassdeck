@@ -1,40 +1,5 @@
-#!/usr/bin/env python3
-"""live_view.py — Textual TUI surfacing decoded signals and bit-flips live.
-
-Two screens, switchable with Tab when a procedure is loaded:
-
-  • AnalysisScreen (default): the three-pane decoded / flipped-bits view.
-    – Decoded signals: current value of every entry in signals.yaml.
-    – Flipped since last mark: every (ID, byte, bit) whose value differs
-      from the snapshot taken at the most recent event mark.
-    – Status: frames / unique IDs / event-mark count.
-
-  • OperatorScreen (only when capture.py is run with --experiment): drives
-    the rider step-by-step through a procedure.yaml, auto-logging marks
-    at each step's cue moment. See ADR 0006.
-
-ADR 0005 principles applied:
-  • Decoded values come from signals.py (same code path as post-hoc
-    decoders) — no second implementation of the schema.
-  • All event marks and frames are written to capture.log / events.csv
-    just as they would be without --live. The TUI is a window onto the
-    same artifacts an agent could reconstruct from disk.
-  • The `.` hotkey snapshots the current flipped-bits table to
-    `snapshot-<n>.json` in the session dir AND records a `snapshot-<n>`
-    event mark referencing it.
-  • `live_decode.csv` (long format: ts, signal, value, raw) is streamed
-    next to capture.log so the per-frame decoded view is available to
-    agents without rerunning the decoder.
-
-ADR 0006 additions:
-  • `procedure.yaml.snapshot` is copied into the session dir by capture.py
-    before the app starts.
-  • Procedure-driven auto-marks share the same `_mark()` path as hotkey
-    marks — the flip-baselining window opens regardless of which screen
-    is visible.
-
-Used only by capture.py when --live (or --experiment) is passed.
-"""
+"""LiveView — the Textual App. Owns all per-frame state and timers;
+screens are thin views over this state."""
 
 from __future__ import annotations
 
@@ -42,221 +7,38 @@ import csv
 import json
 import math
 import queue
-import threading
 import time
-from collections import Counter
+from collections import Counter, deque, defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
-from textual.app import App, ComposeResult
+from textual.app import App
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
-from textual.screen import ModalScreen, Screen
-from textual.widgets import Static
 
 from procedure import Procedure
 from signals import Signal, by_id
 
-FLIP_WINDOW_SECS = 0.5  # observe flips for this long after each event mark
-DECODED_REFRESH_HZ = 4
-FRAME_DRAIN_HZ = 30
-PROCEDURE_TICK_HZ = 10
-STALE_AFTER_SECS = 2.0  # dim decoded values not updated within this window
-
-PREVIEW_LOOKAHEAD = 3  # number of upcoming steps shown on the operator screen
-
-
-class LiveBridge:
-    """Thread-safe handoff between the capture thread (frame producer +
-    serial read) and the Textual main thread (UI + keyboard)."""
-
-    def __init__(self) -> None:
-        self.frame_q: queue.Queue[tuple[float, int, bytes]] = queue.Queue(maxsize=20000)
-        self.stop = threading.Event()
-        self.dropped = 0
-
-    def feed_frame(self, ts: float, arb_id: int, data: bytes) -> None:
-        try:
-            self.frame_q.put_nowait((ts, arb_id, data))
-        except queue.Full:
-            self.dropped += 1
-
-
-# ---------------------------------------------------------------------------
-# Screens
-# ---------------------------------------------------------------------------
-
-
-class LegendScreen(ModalScreen):
-    """Centered overlay showing the hotkey legend. Any key dismisses it.
-
-    Textual's `notify` toast caps width at ~40 cells, so the multi-column
-    legend wraps unreadably — a dedicated modal lets the legend render at
-    its natural width."""
-
-    CSS = """
-    LegendScreen { align: center middle; }
-    #legend-box {
-        width: auto;
-        max-width: 80%;
-        height: auto;
-        border: round white;
-        padding: 1 2;
-        background: $surface;
-    }
-    """
-
-    def __init__(self, legend_text: str) -> None:
-        super().__init__()
-        self._legend_text = legend_text.strip("\n")
-
-    def compose(self) -> ComposeResult:
-        yield Static(
-            f"[bold]Hotkey legend[/bold]\n\n{self._legend_text}\n\n[dim](press any key to close)[/dim]",
-            id="legend-box",
-        )
-
-    def on_key(self, event) -> None:
-        event.stop()
-        self.dismiss()
-
-
-class AnalysisScreen(Screen):
-    """Three-pane decoded / flipped-bits / status view. Reads App state."""
-
-    CSS = """
-    AnalysisScreen { layout: vertical; }
-    #decoded         { height: 14; border: round green;  padding: 0 1; }
-    #flipped-row     { height: 16; layout: horizontal; }
-    #flipped-known   { width: 1fr; height: 100%; border: round cyan;   padding: 0 1; }
-    #flipped-unknown { width: 1fr; height: 100%; border: round yellow; padding: 0 1; }
-    #status          { height: 3;  border: round white;  padding: 0 1; }
-    """
-
-    def compose(self) -> ComposeResult:
-        yield Vertical(
-            Static("", id="decoded"),
-            Horizontal(
-                Static("", id="flipped-known"),
-                Static("", id="flipped-unknown"),
-                id="flipped-row",
-            ),
-            Static("", id="status"),
-        )
-
-    def on_mount(self) -> None:
-        self.refresh_panes()
-
-    def refresh_panes(self) -> None:
-        app: LiveView = self.app  # type: ignore[assignment]
-        try:
-            self.query_one("#decoded", Static).update(app.decoded_text())
-            known_text, unknown_text = app.flipped_texts()
-            self.query_one("#flipped-known", Static).update(known_text)
-            self.query_one("#flipped-unknown", Static).update(unknown_text)
-            self.query_one("#status", Static).update(app.status_text())
-        except Exception:
-            pass
-
-
-class OperatorScreen(Screen):
-    """Big-prompt + countdown screen that drives the rider through a
-    procedure.yaml. Auto-marks fire at each step's start moment via the
-    App's _start_step() / _mark() path."""
-
-    CSS = """
-    OperatorScreen { layout: vertical; }
-    #op-header    { height: 1; padding: 0 2; }
-    #op-prompt    { height: 7; content-align: center middle; }
-    #op-countdown { height: 5; content-align: center middle; }
-    #op-preview   { height: 5; padding: 0 4; }
-    #op-help      { height: 1; padding: 0 2; }
-    #op-status    { dock: bottom; height: 3; border: round white; padding: 0 1; }
-    """
-
-    def compose(self) -> ComposeResult:
-        yield Static("", id="op-header")
-        yield Static("", id="op-prompt")
-        yield Static("", id="op-countdown")
-        yield Static("", id="op-preview")
-        yield Static("", id="op-help")
-        yield Static("", id="op-status")
-
-    def on_mount(self) -> None:
-        self.refresh_panes()
-
-    def refresh_panes(self) -> None:
-        app: LiveView = self.app  # type: ignore[assignment]
-        proc = app.procedure
-        if proc is None:
-            return
-        i = app.step_index
-        steps = proc.steps
-        if i >= len(steps):
-            i = len(steps) - 1
-        step = steps[i]
-
-        # Header — STEP n of N + a 20-cell progress bar.
-        n_total = len(steps)
-        bar_len = 20
-        filled = int(bar_len * (i + 1) / n_total)
-        bar = "█" * filled + "░" * (bar_len - filled)
-        self.query_one("#op-header", Static).update(
-            f"[bold]STEP {i + 1} of {n_total}[/bold]   {bar}"
-        )
-
-        # Big prompt.
-        self.query_one("#op-prompt", Static).update(f"[bold]{step.prompt}[/bold]")
-
-        # Countdown: peek at the NEXT step's countdown_from. The cue belongs
-        # to the upcoming action — we render it during the trailing seconds
-        # of the current step's settle. (ADR 0006's YAML example puts
-        # `countdown_from` on the toggle step itself; the cue runs during
-        # the preceding settle. See the ADR's "Hotkeys / countdown" section.)
-        countdown_text = ""
-        if app.paused:
-            countdown_text = "[bold yellow][PAUSED][/bold yellow]"
-        elif step.duration_secs is None:
-            countdown_text = "[dim]— press q to stop —[/dim]"
-        else:
-            remaining = step.duration_secs - app.step_elapsed()
-            next_step = steps[i + 1] if i + 1 < n_total else None
-            if next_step is not None and next_step.countdown_from is not None:
-                if remaining <= next_step.countdown_from and remaining > 0:
-                    digit = max(1, math.ceil(remaining))
-                    countdown_text = f"[bold red]{digit}[/bold red]"
-                elif remaining <= 0:
-                    countdown_text = "[bold red]NOW[/bold red]"
-            if not countdown_text:
-                # No cue active — show generic remaining time, dim.
-                if remaining > 0:
-                    countdown_text = f"[dim]{remaining:.0f}s[/dim]"
-        self.query_one("#op-countdown", Static).update(countdown_text)
-
-        # Next 3 steps preview.
-        preview_lines: list[str] = ["[bold]Coming up:[/bold]"]
-        for j in range(i + 1, min(i + 1 + PREVIEW_LOOKAHEAD, n_total)):
-            ns = steps[j]
-            dur = "manual" if ns.duration_secs is None else f"{ns.duration_secs:g}s"
-            cd = f", ⏱{ns.countdown_from}" if ns.countdown_from else ""
-            preview_lines.append(f"  → {ns.prompt}  [dim]({dur}{cd})[/dim]")
-        if i + 1 >= n_total:
-            preview_lines.append("  [dim](last step)[/dim]")
-        self.query_one("#op-preview", Static).update("\n".join(preview_lines))
-
-        self.query_one("#op-help", Static).update(
-            "[dim]Tab: analysis view   Space: pause   ←: prev step   q: quit[/dim]"
-        )
-
-        # Status — same shape as analysis, plus step counter.
-        self.query_one("#op-status", Static).update(
-            app.status_text(extra=f"step {i + 1}/{n_total}")
-        )
-
-
-# ---------------------------------------------------------------------------
-# App
-# ---------------------------------------------------------------------------
+from .bridge import LiveBridge
+from .constants import (
+    DECODED_REFRESH_HZ,
+    DISCOVERY_PANE_ROWS,
+    EWMA_ALPHA,
+    FLIP_WINDOW_SECS,
+    FRAME_DRAIN_HZ,
+    PROCEDURE_TICK_HZ,
+    SIGMA_FLOOR,
+    STALE_AFTER_SECS,
+)
+from .modals import LegendScreen, UnpinModal, WatchModal
+from .screens import AnalysisScreen, OperatorScreen
+from .state import (
+    BaselineStats,
+    GroupedRow,
+    WatchPin,
+    _render_group_row,
+    _signed_secs,
+    sparkline,
+)
 
 
 class LiveView(App):
@@ -276,23 +58,33 @@ class LiveView(App):
     def __init__(
         self,
         bridge: LiveBridge,
-        session_dir: Path,
+        session_dir: Path | None,
         signals: list[Signal],
         events_log,
         hotkeys: dict[str, tuple[str, str]],
         legend_text: str,
         show_d7: bool = False,
         procedure: Procedure | None = None,
+        anomaly_z_threshold: float = 3.0,
+        anomaly_warmup_flips: int = 5,
+        discovery_retention_secs: float = 60.0,
+        show_suppressed: bool = False,
     ) -> None:
+        # session_dir=None is the --watch path: render-only, no disk writes.
         super().__init__()
         self.bridge = bridge
         self.session_dir = session_dir
         self.signals = signals
         self.by_arb = by_id(signals)
+        # signals.yaml is read once at startup — the bit→signal index is
+        # immutable for the session, so cache it instead of rebuilding on
+        # every render.
+        self._bit_index = self._compute_bit_index()
         self.events_log = events_log
         self.hotkeys = hotkeys
         self.legend_text = legend_text
         self.show_d7 = show_d7
+        self.show_suppressed = show_suppressed
 
         # Per-signal latest decoded (value, raw_int_or_None, timestamp).
         self.latest: dict[str, tuple[Any, Any, float]] = {}
@@ -309,6 +101,26 @@ class LiveView(App):
         self.window_end_ts: float | None = None
         self.last_event_ts: float | None = None
 
+        # ADR 0007 — continuous per-bit baseline + discovery state.
+        self.z_threshold = anomaly_z_threshold
+        self.warmup_flips = anomaly_warmup_flips
+        self.retention_secs = discovery_retention_secs
+        self.baseline_stats: dict[tuple[int, int, int], BaselineStats] = {}
+        # At-flip-time verdict snapshot, populated only during a mark window
+        # so the mark-driven pane shows the (z, μ, σ) AS THEY WERE at the
+        # moment of the flip — not where the EWMA has drifted to by render.
+        # Tuple: (z, mu, sigma, transition). Cleared in `_open_flip_window`.
+        self.flip_verdict: dict[tuple[int, int, int], tuple[float, float, float, str]] = {}
+        # Recent non-suppressed anomalies for the continuous discovery pane.
+        # Tuple: (ts, arb, byte, bit, transition, interval, z, mu, sigma).
+        # maxlen is a runaway-bounded backstop; aging by `retention_secs`
+        # happens at render time in `discovery_text`.
+        self.recent_anomalies: deque[
+            tuple[float, int, int, int, str, float, float, float, float]
+        ] = deque(maxlen=2000)
+        # Watch panel pins (UI-only, session-local — see ADR 0007).
+        self.watch_pins: list[WatchPin] = []
+
         self.snapshot_seq = 0
         self.total_frames = 0
         self.unique_ids: set[int] = set()
@@ -323,11 +135,15 @@ class LiveView(App):
         self._pause_started_at: float | None = None
 
         # live_decode.csv — long format so per-row content is uniform
-        # regardless of which signal a frame fed.
-        self._csv_file = (session_dir / "live_decode.csv").open("w", newline="")
-        self._csv_writer = csv.writer(self._csv_file)
-        self._csv_writer.writerow(["timestamp", "signal", "value", "raw"])
-        self._csv_file.flush()
+        # regardless of which signal a frame fed. In --watch mode there's
+        # no session dir, so the writer (and its file handle) stay None.
+        self._csv_file = None
+        self._csv_writer = None
+        if session_dir is not None:
+            self._csv_file = (session_dir / "live_decode.csv").open("w", newline="")
+            self._csv_writer = csv.writer(self._csv_file)
+            self._csv_writer.writerow(["timestamp", "signal", "value", "raw"])
+            self._csv_file.flush()
 
     # ---- Textual lifecycle ------------------------------------------------
 
@@ -343,10 +159,11 @@ class LiveView(App):
             self.push_screen("analysis")
 
     async def on_unmount(self) -> None:
-        try:
-            self._csv_file.close()
-        except Exception:
-            pass
+        if self._csv_file is not None:
+            try:
+                self._csv_file.close()
+            except Exception:
+                pass
 
     # ---- input ------------------------------------------------------------
 
@@ -364,6 +181,17 @@ class LiveView(App):
             return
         if ch == ".":
             self._handle_snapshot()
+            return
+        if ch == "w":
+            # Don't stack a second modal if one is already on top.
+            if not isinstance(self.screen, (WatchModal, UnpinModal, LegendScreen)):
+                self.push_screen(WatchModal(self.signals), self._add_watch_pin)
+            return
+        if ch == "u":
+            if self.watch_pins and not isinstance(
+                self.screen, (WatchModal, UnpinModal, LegendScreen)
+            ):
+                self.push_screen(UnpinModal(self.watch_pins), self._remove_watch_pin)
             return
         if ch in self.hotkeys:
             key, label = self.hotkeys[ch]
@@ -420,7 +248,7 @@ class LiveView(App):
                 drained += 1
         except queue.Empty:
             pass
-        if drained:
+        if drained and self._csv_file is not None:
             try:
                 self._csv_file.flush()
             except Exception:
@@ -437,13 +265,33 @@ class LiveView(App):
                 continue
             raw = sig._extract_raw(data)
             self.latest[sig.name] = (value, raw, ts)
-            self._csv_writer.writerow([f"{ts:.6f}", sig.name, value, raw])
+            if self._csv_writer is not None:
+                self._csv_writer.writerow([f"{ts:.6f}", sig.name, value, raw])
 
-        # Per-byte tracking. Update current; check baseline if a flip
-        # window is open.
+        # Per-byte tracking. Two concerns share this loop:
+        #   (a) Continuous per-bit transition detection — runs on every
+        #       frame regardless of mark state, feeds the EWMA baseline
+        #       and the continuous discovery pane (ADR 0007).
+        #   (b) Mark-window flip accumulation — runs ONLY when a mark
+        #       window is open, feeds snapshot-N.json and the mark-driven
+        #       pane. Unchanged behaviour from before ADR 0007.
+        window_open = self.window_end_ts is not None and ts <= self.window_end_ts
         for b_idx, val in enumerate(data):
+            prev = self.current_bytes.get((arb, b_idx))
             self.current_bytes[(arb, b_idx)] = val
-            if self.window_end_ts is None or ts > self.window_end_ts:
+
+            # (a) Continuous detection — only fires on actual transitions.
+            if prev is not None and prev != val:
+                changed = prev ^ val
+                for bit in range(8):
+                    if not changed & (1 << bit):
+                        continue
+                    old_bit = (prev >> bit) & 1
+                    new_bit = (val >> bit) & 1
+                    self._record_transition(ts, arb, b_idx, bit, old_bit, new_bit)
+
+            # (b) Mark-window accumulation — keyed off the baseline snapshot.
+            if not window_open:
                 continue
             base = self.baseline_bytes.get((arb, b_idx))
             if base is None or base == val:
@@ -459,6 +307,51 @@ class LiveView(App):
                 self.flip_obs.setdefault(key, Counter())[transition] += 1
                 self.flip_first_seen.setdefault(key, ts)
 
+    def _record_transition(
+        self, ts: float, arb: int, byte: int, bit: int, old_bit: int, new_bit: int
+    ) -> None:
+        """Update per-bit EWMA, score, and (if anomalous) push to the
+        recent-anomalies log + the mark-window verdict map. See ADR 0007."""
+        key = (arb, byte, bit)
+        transition = f"{old_bit}→{new_bit}"
+        stats = self.baseline_stats.get(key)
+        if stats is None:
+            # First-ever observation for this bit — no prior interval to
+            # score. Seed the baseline and surface nothing.
+            self.baseline_stats[key] = BaselineStats(last_flip_ts=ts, count=1)
+            return
+
+        interval = ts - stats.last_flip_ts
+        stats.last_flip_ts = ts
+        stats.count += 1
+
+        # Score BEFORE updating the EWMA so a single tail event doesn't
+        # blunt its own z-score by reshaping the baseline it's measured
+        # against. Renderers branch on `isinf(z)` and never read μ/σ in
+        # the warmup case — the snapshot values are placeholders.
+        mu_snap = stats.mu
+        if stats.count <= self.warmup_flips:
+            z = math.inf
+            sigma_snap = 0.0
+            keep = True
+        else:
+            sigma_snap = max(math.sqrt(stats.var), SIGMA_FLOOR)
+            z = (interval - mu_snap) / sigma_snap
+            keep = z >= self.z_threshold
+
+        delta = interval - stats.mu
+        stats.mu += EWMA_ALPHA * delta
+        stats.var = (1 - EWMA_ALPHA) * (stats.var + EWMA_ALPHA * delta * delta)
+
+        if not keep:
+            return
+
+        self.recent_anomalies.append(
+            (ts, arb, byte, bit, transition, interval, z, mu_snap, sigma_snap)
+        )
+        if self.window_end_ts is not None and ts <= self.window_end_ts:
+            self.flip_verdict[key] = (z, mu_snap, sigma_snap, transition)
+
     # ---- event marks ------------------------------------------------------
 
     def _mark(self, key: str, label: str) -> None:
@@ -470,11 +363,23 @@ class LiveView(App):
         self.baseline_bytes = dict(self.current_bytes)
         self.flip_obs.clear()
         self.flip_first_seen.clear()
+        self.flip_verdict.clear()
         self.window_label = label
         self.window_end_ts = ts + FLIP_WINDOW_SECS
         self.last_event_ts = ts
 
     def _handle_snapshot(self) -> None:
+        if self.session_dir is None:
+            # --watch path: nowhere to write. Surface a hint and bail.
+            try:
+                self.notify(
+                    "snapshots need a real session — relaunch without --watch.",
+                    severity="warning",
+                    timeout=3,
+                )
+            except Exception:
+                pass
+            return
         self.snapshot_seq += 1
         seq = self.snapshot_seq
         ts = time.time()
@@ -553,6 +458,15 @@ class LiveView(App):
     # ---- screen refresh dispatch ------------------------------------------
 
     def _refresh_active_screen(self) -> None:
+        # Sample watch buffers BEFORE rendering so the sparkline reflects
+        # the freshest data point. Runs regardless of which screen is
+        # active, so the buffer stays populated while the operator screen
+        # is up (and the analysis screen shows continuous history on
+        # return).
+        try:
+            self._sample_watch_buffers()
+        except Exception:
+            pass
         screen = self.screen
         refresher = getattr(screen, "refresh_panes", None)
         if refresher is not None:
@@ -561,7 +475,46 @@ class LiveView(App):
             except Exception:
                 pass
 
+    def _add_watch_pin(self, pin: WatchPin | None) -> None:
+        if pin is None:
+            return
+        # Dedup: a given signal / triplet may only be pinned once.
+        if pin.kind == "signal":
+            if any(p.kind == "signal" and p.label == pin.label for p in self.watch_pins):
+                return
+        else:
+            if any(p.kind == "raw" and p.raw == pin.raw for p in self.watch_pins):
+                return
+        self.watch_pins.append(pin)
+
+    def _remove_watch_pin(self, idx: int | None) -> None:
+        if idx is None or idx < 0 or idx >= len(self.watch_pins):
+            return
+        self.watch_pins.pop(idx)
+
+    def _sample_watch_buffers(self) -> None:
+        """Push the current value of every pinned entry into its sparkline
+        ring buffer. Called once per decoded refresh tick."""
+        for pin in self.watch_pins:
+            pin.sample(self.latest, self.current_bytes)
+
     # ---- pane content (shared by both screens) ----------------------------
+
+    def watch_text(self) -> str:
+        """Render the pinned-watch pane (ADR 0007 #1). One row per pin
+        with current value, a 12-cell sparkline of the recent buffer, and
+        the pin origin so a raw triplet stays unambiguous."""
+        header = "[bold]Watch[/bold]"
+        if not self.watch_pins:
+            return header + "  [dim](press w to pin a signal; u to unpin)[/dim]"
+        body: list[str] = []
+        for pin in self.watch_pins:
+            value_str = pin.current_text(self.latest, self.current_bytes)
+            spark = sparkline(list(pin.buffer), boolean=pin.boolean)
+            body.append(
+                f"  {pin.label:24s}  {value_str:>10}   {spark}   [dim]{pin.label}[/dim]"
+            )
+        return header + "\n" + "\n".join(body)
 
     def decoded_text(self) -> str:
         now = time.time()
@@ -578,7 +531,7 @@ class LiveView(App):
             lines.append(f"  {sig.name:24s} {rendered:<16} {sig.status}{stale}")
         return "\n".join(lines)
 
-    def _bit_to_signal(self) -> dict[tuple[int, int, int], str]:
+    def _compute_bit_index(self) -> dict[tuple[int, int, int], str]:
         """Map every bit covered by any signal to that signal's name."""
         index: dict[tuple[int, int, int], str] = {}
         for sig in self.signals:
@@ -593,7 +546,7 @@ class LiveView(App):
 
     def _flip_rows(self) -> list[tuple[int, int, int, str, int, float, str, float]]:
         """Per-bit flip rows used by the unknown pane and snapshot JSON."""
-        index = self._bit_to_signal()
+        index = self._bit_index
         mark_ts = self.last_event_ts
         rows = []
         for (arb, byte, bit), counter in self.flip_obs.items():
@@ -609,8 +562,100 @@ class LiveView(App):
         rows.sort(key=lambda r: r[7])
         return rows
 
+    def _group_rows_by_arb(
+        self,
+        rows: Iterable[tuple[int, int, int, str, float, float, float, float]],
+    ) -> list[GroupedRow]:
+        """Group per-bit anomaly rows by arbitration ID (ADR 0007 #5).
+
+        Row tuple: (arb, byte, bit, transition, event_ts, z, mu, sigma).
+        `event_ts` is latency-from-mark for the mark-driven pane, or
+        wall-clock for the continuous discovery pane — opaque to the
+        grouper. `z=math.inf` marks a warmup-tier event."""
+        groups: dict[int, list[tuple[int, int, str, float, float, float, float]]] = (
+            defaultdict(list)
+        )
+        for arb, byte, bit, transition, event_ts, z, mu, sigma in rows:
+            groups[arb].append((byte, bit, transition, event_ts, z, mu, sigma))
+
+        out: list[GroupedRow] = []
+        for arb, items in groups.items():
+            bits_seen: set[tuple[int, int]] = set()
+            transitions: list[str] = []
+            seen_trans: set[str] = set()
+            earliest = math.inf
+            latest = -math.inf
+            best_z = -math.inf
+            best_mu = 0.0
+            best_sigma = 0.0
+            for byte, bit, transition, event_ts, z, mu, sigma in items:
+                bits_seen.add((byte, bit))
+                if transition not in seen_trans:
+                    transitions.append(transition)
+                    seen_trans.add(transition)
+                if event_ts < earliest:
+                    earliest = event_ts
+                if event_ts > latest:
+                    latest = event_ts
+                if z > best_z:
+                    best_z, best_mu, best_sigma = z, mu, sigma
+            out.append(
+                GroupedRow(
+                    arb=arb,
+                    bits=sorted(bits_seen),
+                    earliest_ts=earliest,
+                    latest_ts=latest,
+                    max_z=best_z,
+                    mu=best_mu,
+                    sigma=best_sigma,
+                    transitions=transitions,
+                )
+            )
+        return out
+
+    def _unknown_pane_groups(self) -> list[GroupedRow]:
+        """Mark-driven unknown-flips pane (ADR 0007 #3 + #5).
+
+        Two independent gates:
+        - `--show-d7` (default off): D7 byte hidden by default (checksum
+          noise).
+        - `--show-suppressed` (default off): bits whose EWMA verdict did
+          not surface them as anomalous are hidden.
+        """
+        if self.last_event_ts is None:
+            return []
+        index = self._bit_index
+        mark_ts = self.last_event_ts
+        per_bit: list[tuple[int, int, int, str, float, float, float, float]] = []
+        for (arb, byte, bit), counter in self.flip_obs.items():
+            if not counter:
+                continue
+            if index.get((arb, byte, bit)):
+                continue  # owned by a known signal — known pane handles it
+            if byte == 7 and not self.show_d7:
+                continue
+            verdict = self.flip_verdict.get((arb, byte, bit))
+            if verdict is None:
+                if not self.show_suppressed:
+                    continue
+                # Override: surface the row, mark it as below threshold.
+                transition = counter.most_common(1)[0][0]
+                # Use −inf to sort suppressed rows below any real anomaly.
+                z, mu, sigma = -math.inf, 0.0, 0.0
+            else:
+                z, mu, sigma, transition = verdict
+            first_seen = self.flip_first_seen.get((arb, byte, bit), mark_ts)
+            latency = first_seen - mark_ts
+            per_bit.append((arb, byte, bit, transition, latency, z, mu, sigma))
+
+        groups = self._group_rows_by_arb(per_bit)
+        # math.inf naturally sorts above any finite z and -math.inf below;
+        # earliest-latency breaks ties at the same z.
+        groups.sort(key=lambda g: (-g.max_z, g.earliest_ts))
+        return groups
+
     def _known_signal_rows(self) -> list[tuple[str, str, str, int]]:
-        index = self._bit_to_signal()
+        index = self._bit_index
         per_signal_flips: dict[str, int] = {}
         for (arb, byte, bit), counter in self.flip_obs.items():
             name = index.get((arb, byte, bit))
@@ -670,36 +715,52 @@ class LiveView(App):
                 body.append(f"  … and {len(known_rows) - 10} more")
             known_text = known_header + "\n" + "\n".join(body)
 
-        unknown_rows = [r for r in self._flip_rows() if not r[6]]
-        d7_hidden = 0
-        if not self.show_d7:
-            kept = [r for r in unknown_rows if r[1] != 7]
-            d7_hidden = len(unknown_rows) - len(kept)
-            unknown_rows = kept
-        unknown_header = f"[bold]Unknown bits flipped[/bold]  {ctx}"
-        if not unknown_rows:
-            footer = ""
-            if d7_hidden:
-                footer = f"\n  [dim]({d7_hidden} D7 bit(s) hidden — checksum noise; --show-d7 to reveal)[/dim]"
-            unknown_text = (
-                f"{unknown_header}\n  (none — no novel bit flips in last {FLIP_WINDOW_SECS:.1f}s)"
-                + footer
+        groups = self._unknown_pane_groups()
+        z_hint = f"z ≥ {self.z_threshold:.1f}" if not self.show_suppressed else "all flips"
+        unknown_header = f"[bold]Unknown bits flipped[/bold]  {ctx}  [dim]({z_hint})[/dim]"
+        if not groups:
+            hint = (
+                "  (no anomalous flips in window — checksum / counter noise suppressed)"
+                if not self.show_suppressed
+                else "  (no flips in window)"
             )
+            unknown_text = unknown_header + "\n" + hint
         else:
-            body = []
-            for arb, byte, bit, transition, count, fraction, _, latency in unknown_rows[:10]:
-                lat = f"+{latency:.2f}s" if latency >= 0 else f"{latency:.2f}s"
-                body.append(
-                    f"  0x{arb:03X} D{byte} bit {bit}  {transition}  {lat:>7}  ×{count}  "
-                    f"frac={fraction:.2f}"
-                )
-            if len(unknown_rows) > 10:
-                body.append(f"  … and {len(unknown_rows) - 10} more")
-            if d7_hidden:
-                body.append(f"  [dim]({d7_hidden} D7 bit(s) hidden — checksum noise; --show-d7 to reveal)[/dim]")
+            body = [_render_group_row(g, _signed_secs(g.earliest_ts)) for g in groups[:10]]
+            if len(groups) > 10:
+                body.append(f"  … and {len(groups) - 10} more")
             unknown_text = unknown_header + "\n" + "\n".join(body)
 
         return known_text, unknown_text
+
+    def discovery_text(self) -> str:
+        """Always-on anomaly pane (ADR 0007 #4).
+
+        Surfaces every bit-flip that the EWMA scored as anomalous since
+        the last `retention_secs` seconds, grouped by ID, newest-first.
+        Marks are NOT required — this fills passively as the bus reacts."""
+        now = time.time()
+        cutoff = now - self.retention_secs
+        # Prune from the left — entries are appended in ts-monotonic order.
+        while self.recent_anomalies and self.recent_anomalies[0][0] < cutoff:
+            self.recent_anomalies.popleft()
+        header = f"[bold]Live anomalies[/bold]  [dim](last {self.retention_secs:.0f}s, z ≥ {self.z_threshold:.1f})[/dim]"
+        if not self.recent_anomalies:
+            return header + "\n  (idle — no anomalous flips yet)"
+
+        groups = self._group_rows_by_arb(
+            (arb, byte, bit, transition, ts, z, mu, sigma)
+            for ts, arb, byte, bit, transition, _interval, z, mu, sigma in self.recent_anomalies
+        )
+        groups.sort(key=lambda g: -g.latest_ts)  # newest first
+        max_rows = DISCOVERY_PANE_ROWS - 2
+        body = [
+            _render_group_row(g, f"-{now - g.latest_ts:.1f}s")
+            for g in groups[:max_rows]
+        ]
+        if len(groups) > max_rows:
+            body.append(f"  … and {len(groups) - max_rows} more")
+        return header + "\n" + "\n".join(body)
 
     def status_text(self, extra: str = "") -> str:
         dropped = f"  [red]dropped {self.bridge.dropped}[/red]" if self.bridge.dropped else ""

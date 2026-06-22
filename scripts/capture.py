@@ -64,6 +64,8 @@ LEGEND = """
   m      ROAD/SUPERMOTO       r  trip reset      t  throttle blip
   k      kill switch          s  starter         h  horn
   e      idle settled         ?  this legend     q  stop capture
+  w      pin a signal to the Watch pane (live-only)
+  u      unpin a Watch entry                     .  snapshot
   (any other key: recorded raw, label it later in session.md)
 """
 
@@ -153,6 +155,30 @@ class EventLogger:
     def close(self) -> None:
         with self._lock:
             self._file.close()
+
+
+class NullEventLogger:
+    """Drop-in EventLogger for --watch: counts marks (so the live view's
+    `marks N` status stays meaningful) but never touches disk."""
+
+    def __init__(self) -> None:
+        self.count = 0
+
+    def log(self, key: str, label: str) -> None:
+        self.count += 1
+
+    def close(self) -> None:
+        pass
+
+
+class _NullCanLogger:
+    """can.Logger stand-in for --watch — accepts frames, writes nothing."""
+
+    def on_message_received(self, msg) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
 
 
 class KeyReader(threading.Thread):
@@ -284,6 +310,33 @@ def main() -> int:
              "would swamp the pane). Snapshot JSON always records D7 flips.",
     )
     parser.add_argument(
+        "--anomaly-z-threshold",
+        type=float,
+        default=3.0,
+        help="z-score threshold above which a bit-flip is treated as anomalous "
+             "(ADR 0007). Higher = stricter / fewer rows; lower = noisier panes.",
+    )
+    parser.add_argument(
+        "--anomaly-warmup-flips",
+        type=int,
+        default=5,
+        help="Number of initial flips per bit during which every flip surfaces "
+             "with z=∞, before the EWMA baseline takes over (ADR 0007).",
+    )
+    parser.add_argument(
+        "--discovery-retention-secs",
+        type=float,
+        default=60.0,
+        help="How long an anomalous flip stays visible in the continuous "
+             "discovery pane before aging out (ADR 0007).",
+    )
+    parser.add_argument(
+        "--show-suppressed",
+        action="store_true",
+        help="In the mark-driven pane, also surface bits whose EWMA verdict "
+             "suppressed them (ADR 0007). Orthogonal to --show-d7.",
+    )
+    parser.add_argument(
         "--experiment",
         type=Path,
         default=None,
@@ -292,10 +345,23 @@ def main() -> int:
              "step-by-step and auto-logs marks at each step's cue moment. "
              "The YAML is byte-copied into <session>/procedure.yaml.snapshot.",
     )
+    parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="Open the live TUI without writing anything to disk — no session "
+             "dir, no capture.log, no events.csv, no live_decode.csv, no "
+             "session.md. Hotkeys still baseline flip windows; the '.' "
+             "snapshot hotkey becomes a no-op (it needs a real session). "
+             "Implies --live; incompatible with --experiment.",
+    )
     args = parser.parse_args()
 
+    if args.watch and args.experiment:
+        sys.exit("--watch is incompatible with --experiment (procedures need persisted marks).")
     if args.experiment and not args.live:
         sys.stderr.write("--experiment implies --live; enabling live mode.\n")
+        args.live = True
+    if args.watch and not args.live:
         args.live = True
 
     try:
@@ -313,11 +379,17 @@ def main() -> int:
             "  pip install -r scripts/requirements.txt"
         )
 
-    session_dir = resolve_session_dir(args.label)
-    fw_rev = args.firmware_rev or detect_firmware_rev()
+    if args.watch:
+        session_dir = None
+        fw_rev = None
+    else:
+        session_dir = resolve_session_dir(args.label)
+        fw_rev = args.firmware_rev or detect_firmware_rev()
 
     procedure = None
     if args.experiment:
+        # --watch + --experiment was already rejected above; session_dir is real here.
+        assert session_dir is not None
         try:
             from procedure import load_procedure  # type: ignore
             procedure = load_procedure(args.experiment)
@@ -332,11 +404,19 @@ def main() -> int:
             f"snapshot → {snapshot_path}\n"
         )
 
-    sys.stderr.write(f"capture session: {session_dir}\n")
+    if args.watch:
+        sys.stderr.write("watch mode: no logs will be written.\n")
+    else:
+        sys.stderr.write(f"capture session: {session_dir}\n")
     sys.stderr.write(f"port: {args.port}   bitrate: {args.bitrate} bps   firmware: {fw_rev or 'unknown'}\n")
     sys.stderr.write("press '?' for hotkey legend, 'q' or Ctrl-C to stop.\n\n")
 
-    events = EventLogger(session_dir / "events.csv")
+    events: EventLogger | NullEventLogger
+    if args.watch:
+        events = NullEventLogger()
+    else:
+        assert session_dir is not None
+        events = EventLogger(session_dir / "events.csv")
     stop = threading.Event()
 
     start_time = time.monotonic()
@@ -360,7 +440,11 @@ def main() -> int:
         events.close()
         sys.exit(f"failed to open serial port {args.port}: {e}")
 
-    writer = can.Logger(filename=str(session_dir / "capture.log"))
+    if args.watch:
+        writer = _NullCanLogger()
+    else:
+        assert session_dir is not None
+        writer = can.Logger(filename=str(session_dir / "capture.log"))
 
     # The capture loop is wrapped in a small inner function so it can run
     # either in the main thread (default — KeyReader handles input + stderr
@@ -454,6 +538,10 @@ def main() -> int:
                 legend_text=LEGEND,
                 show_d7=args.show_d7,
                 procedure=procedure,
+                anomaly_z_threshold=args.anomaly_z_threshold,
+                anomaly_warmup_flips=args.anomaly_warmup_flips,
+                discovery_retention_secs=args.discovery_retention_secs,
+                show_suppressed=args.show_suppressed,
             )
 
             worker = threading.Thread(
@@ -486,21 +574,27 @@ def main() -> int:
         events.close()
 
     end_iso = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
-    write_session_stub(
-        session_dir,
-        args.label,
-        args.bitrate,
-        fw_rev,
-        start_iso,
-        end_iso,
-        total_frames,
-        len(unique_ids),
-        events.count,
-    )
-    sys.stderr.write(
-        f"\ncaptured {total_frames} frames, {len(unique_ids)} unique IDs, {events.count} event marks.\n"
-        f"now fill in the TODOs in {session_dir / 'session.md'}.\n"
-    )
+    if args.watch:
+        sys.stderr.write(
+            f"\nwatched {total_frames} frames, {len(unique_ids)} unique IDs, {events.count} marks (nothing written).\n"
+        )
+    else:
+        assert session_dir is not None
+        write_session_stub(
+            session_dir,
+            args.label,
+            args.bitrate,
+            fw_rev,
+            start_iso,
+            end_iso,
+            total_frames,
+            len(unique_ids),
+            events.count,
+        )
+        sys.stderr.write(
+            f"\ncaptured {total_frames} frames, {len(unique_ids)} unique IDs, {events.count} event marks.\n"
+            f"now fill in the TODOs in {session_dir / 'session.md'}.\n"
+        )
     return 0
 
 
