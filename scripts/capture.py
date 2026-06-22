@@ -269,7 +269,34 @@ def main() -> int:
         default=5.0,
         help="Seconds of bus silence before printing the bring-up diagnostic",
     )
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Open a Textual TUI with decoded signals + flipped-since-mark pane "
+             "(see scripts/live_view.py and ADR 0005). Writes live_decode.csv "
+             "next to capture.log; snapshot hotkey '.' dumps snapshot-<n>.json.",
+    )
+    parser.add_argument(
+        "--show-d7",
+        action="store_true",
+        help="Include D7 bytes in the live unknown-bits pane (off by default — "
+             "D7 churns deterministically per byte-d7-checksum-hypothesis and "
+             "would swamp the pane). Snapshot JSON always records D7 flips.",
+    )
+    parser.add_argument(
+        "--experiment",
+        type=Path,
+        default=None,
+        help="Path to a procedure.yaml sidecar (ADR 0006). Implies --live: "
+             "the operator screen drives the rider through the procedure "
+             "step-by-step and auto-logs marks at each step's cue moment. "
+             "The YAML is byte-copied into <session>/procedure.yaml.snapshot.",
+    )
     args = parser.parse_args()
+
+    if args.experiment and not args.live:
+        sys.stderr.write("--experiment implies --live; enabling live mode.\n")
+        args.live = True
 
     try:
         import can
@@ -288,6 +315,22 @@ def main() -> int:
 
     session_dir = resolve_session_dir(args.label)
     fw_rev = args.firmware_rev or detect_firmware_rev()
+
+    procedure = None
+    if args.experiment:
+        try:
+            from procedure import load_procedure  # type: ignore
+            procedure = load_procedure(args.experiment)
+        except Exception as e:
+            sys.exit(f"failed to load procedure {args.experiment}: {e}")
+        # Byte-identical copy preserves comments / ordering — the session
+        # becomes self-documenting per ADR 0005's reconstructibility rule.
+        snapshot_path = session_dir / "procedure.yaml.snapshot"
+        snapshot_path.write_bytes(args.experiment.read_bytes())
+        sys.stderr.write(
+            f"loaded procedure {procedure.name} ({len(procedure.steps)} steps); "
+            f"snapshot → {snapshot_path}\n"
+        )
 
     sys.stderr.write(f"capture session: {session_dir}\n")
     sys.stderr.write(f"port: {args.port}   bitrate: {args.bitrate} bps   firmware: {fw_rev or 'unknown'}\n")
@@ -319,69 +362,128 @@ def main() -> int:
 
     writer = can.Logger(filename=str(session_dir / "capture.log"))
 
-    with KeyReader(events, stop):
+    # The capture loop is wrapped in a small inner function so it can run
+    # either in the main thread (default — KeyReader handles input + stderr
+    # status line) or as a worker thread under the Textual live view (which
+    # owns the terminal). on_frame_cb fires after each successful frame.
+    def capture_loop(
+        on_frame_cb=None,
+        on_silence_cb=None,
+        on_status_cb=None,
+    ) -> None:
+        nonlocal total_frames, silence_warned, last_status
         try:
             while not stop.is_set():
                 try:
                     line = ser.read_until(b"\r", size=SLCAN_MAX_LINE)
                 except (serial.SerialException, OSError) as e:
-                    # Adapter unplugged, serial port closed — anything that
-                    # breaks the link mid-run. Record where capture died,
-                    # then fall through to finally to save what we have.
                     sys.stderr.write(f"\nbus disconnected: {e}\n")
                     events.log("disconnect", f"{type(e).__name__}: {e}")
                     stop.set()
                     break
                 if line.endswith(b"\r"):
-                    msg = parse_slcan_line(line, time.time())
+                    ts = time.time()
+                    msg = parse_slcan_line(line, ts)
                     if msg is not None:
                         writer.on_message_received(msg)
                         total_frames += 1
                         unique_ids.add(msg.arbitration_id)
+                        if on_frame_cb is not None:
+                            on_frame_cb(ts, msg.arbitration_id, bytes(msg.data))
 
                 now = time.monotonic()
                 elapsed = now - start_time
 
                 if not silence_warned and total_frames == 0 and elapsed > args.silence_warn_secs:
-                    sys.stderr.write(
-                        "\n"
-                        f"no frames after {elapsed:.0f}s — the bus looks silent. check:\n"
-                        "  1. you opened the right port — the firmware emits on the chip's native\n"
-                        "     USB-Serial/JTAG (the port labelled USB on the DevKitC-1), not the\n"
-                        "     UART/COM bridge port. macOS typically enumerates both as\n"
-                        "     /dev/cu.usbmodem* — `ls -la /dev/cu.*` shows timestamps to disambiguate.\n"
-                        "  2. continuity from diagnostic connector to transceiver (pin 2 CANH, pin 5 CANL, pin 3 GND)\n"
-                        "  3. bike at key-on (ignition position 1)\n"
-                        "  4. firmware bitrate matches the bus — if 500 kbps stays silent, try:\n"
-                        "       cd firmware/can-logger && pio run -e logger-250k -t upload\n"
-                        "     and re-run capture with --bitrate 250000\n"
-                        "still listening...\n\n"
-                    )
+                    if on_silence_cb is not None:
+                        on_silence_cb(elapsed)
                     silence_warned = True
 
                 if now - last_status >= 1.0:
-                    mins, secs = divmod(int(elapsed), 60)
-                    hours, mins = divmod(mins, 60)
-                    sys.stderr.write(
-                        f"\r[{hours:02d}:{mins:02d}:{secs:02d}]  "
-                        f"{total_frames:>8} frames   {len(unique_ids):>3} IDs   "
-                        f"{events.count:>3} marks"
-                    )
-                    sys.stderr.flush()
+                    if on_status_cb is not None:
+                        on_status_cb(elapsed, total_frames, len(unique_ids), events.count)
                     last_status = now
         except KeyboardInterrupt:
             stop.set()
-        finally:
-            sys.stderr.write("\n")
+
+    def write_silence(elapsed: float) -> None:
+        sys.stderr.write(
+            "\n"
+            f"no frames after {elapsed:.0f}s — the bus looks silent. check:\n"
+            "  1. you opened the right port — the firmware emits on the chip's native\n"
+            "     USB-Serial/JTAG (the port labelled USB on the DevKitC-1), not the\n"
+            "     UART/COM bridge port. macOS typically enumerates both as\n"
+            "     /dev/cu.usbmodem* — `ls -la /dev/cu.*` shows timestamps to disambiguate.\n"
+            "  2. continuity from diagnostic connector to transceiver (pin 2 CANH, pin 5 CANL, pin 3 GND)\n"
+            "  3. bike at key-on (ignition position 1)\n"
+            "  4. firmware bitrate matches the bus — if 500 kbps stays silent, try:\n"
+            "       cd firmware/can-logger && pio run -e logger-250k -t upload\n"
+            "     and re-run capture with --bitrate 250000\n"
+            "still listening...\n\n"
+        )
+
+    def write_status_line(elapsed, frames, ids, marks) -> None:
+        mins, secs = divmod(int(elapsed), 60)
+        hours, mins = divmod(mins, 60)
+        sys.stderr.write(
+            f"\r[{hours:02d}:{mins:02d}:{secs:02d}]  "
+            f"{frames:>8} frames   {ids:>3} IDs   "
+            f"{marks:>3} marks"
+        )
+        sys.stderr.flush()
+
+    try:
+        if args.live:
+            # Live mode: Textual owns the terminal + input; capture loop
+            # runs in a worker thread, frames cross via LiveBridge.
+            from live_view import LiveBridge, LiveView  # type: ignore
+            from signals import load_signals  # type: ignore
+
             try:
-                writer.stop()
-            except Exception:
-                pass
+                signals = load_signals()
+            except Exception as e:
+                sys.exit(f"failed to load docs/signals/signals.yaml: {e}")
+
+            bridge = LiveBridge()
+            app = LiveView(
+                bridge=bridge,
+                session_dir=session_dir,
+                signals=signals,
+                events_log=events,
+                hotkeys=HOTKEYS,
+                legend_text=LEGEND,
+                show_d7=args.show_d7,
+                procedure=procedure,
+            )
+
+            worker = threading.Thread(
+                target=capture_loop,
+                kwargs={"on_frame_cb": bridge.feed_frame},
+                daemon=True,
+            )
+            worker.start()
             try:
-                ser.close()
-            except Exception:
-                pass
-            events.close()
+                app.run()
+            finally:
+                stop.set()
+                worker.join(timeout=2.0)
+        else:
+            with KeyReader(events, stop):
+                capture_loop(
+                    on_silence_cb=write_silence,
+                    on_status_cb=write_status_line,
+                )
+    finally:
+        sys.stderr.write("\n")
+        try:
+            writer.stop()
+        except Exception:
+            pass
+        try:
+            ser.close()
+        except Exception:
+            pass
+        events.close()
 
     end_iso = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
     write_session_stub(

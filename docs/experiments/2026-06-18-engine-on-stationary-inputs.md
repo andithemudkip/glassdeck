@@ -24,10 +24,10 @@ After the engine-off batch resolves the basic level signals (kill, throttle, gea
 
 Five overlapping sub-hypotheses, all to be tested in one session because each input alone produces a thin signal:
 
-1. **Mode toggle (ROAD ↔ SUPERMOTO):** KTM ties this to `12A` D1 bit 6. At idle our `12A` D1 was LOW-CARD(2) — it does change, possibly already cycling between two values, possibly waiting for the mode toggle. A deliberate toggle resolves it.
+1. **Mode toggle (ROAD ↔ SUPERMOTO):** per the Svartpilen 401 owner's manual this toggle is **ABS-only** — it disables rear-wheel ABS for supermoto-style riding and changes nothing else (no map, no power delta, no TC tweak). The ABS ECU still needs to know the state, so we expect the mode to be broadcast somewhere — KTM ties this on related platforms to `12A` D1 bit 6, and our idle `12A` D1 was LOW-CARD(2), so it's the leading candidate. A deliberate toggle resolves the bit; interpretation is **rear-ABS-enable**, not requested-map.
 2. **Trip reset:** the long-press input on the dash. Likely targets a momentary bit somewhere in the body-controller cluster (`12E`, `450`, `541` are candidates because they're slow-decay and currently UNKNOWN/LOW-CARD).
 3. **Other dash buttons:** the bike has a mode-select / set button cluster. Short presses are different signals from the long-press trip reset. Any combination of bits across the slow-decay group is fair game.
-4. **Throttle blip engine-on:** confirms the throttle-position decoding from [2026-06-18-throttle-sweep-engine-off](2026-06-18-throttle-sweep-engine-off.md) holds with engine running, and provides a second look at `12A` D1 bit 6 (the requested-map bit may only update engine-on).
+4. **Throttle blip engine-on:** confirms the throttle-position decoding from [2026-06-18-throttle-sweep-engine-off](2026-06-18-throttle-sweep-engine-off.md) holds with engine running.
 5. **RPM-driven secondary signals:** with the engine running and the throttle blipped, RPM moves from idle ~1700 up to maybe ~4000–5000 briefly. Any byte that tracks RPM (a load index, a derived gear-ratio in neutral, an engine-load %) becomes visible. The payload-diff classified most `121` bytes as LOW-CARD without a hypothesis — engine-on blipping is the natural way to start separating them.
 
 The session structure matters: each input is bracketed by a held window with no other rider activity, so per-window statistics cleanly attribute movement to one input. Press the right event-mark key on every transition.
@@ -56,7 +56,7 @@ Three toggles. The mode toggle on this bike is a dash button combination — con
 3. Toggle 3 (forward again). `m`. Hold 8 s.
 4. Toggle 4 (back to starting mode). `m`. Hold 8 s.
 
-Eight-second holds because mode-change broadcasts may include a settling transient (the ECU re-evaluating maps, the dash redrawing); 8 s comfortably exceeds the 100 ms cycle of the slowest IDs.
+Eight-second holds because mode-change broadcasts may include a settling transient (the ABS ECU updating its enable line, the dash redrawing the mode indicator); 8 s comfortably exceeds the 100 ms cycle of the slowest IDs.
 
 ### Phase B — trip reset
 
@@ -87,7 +87,7 @@ Three blips, increasing in aggression — single small **`t`** at the start of e
 ## Analysis plan
 
 1. **Phase A — mode toggle.**
-   - `12A` D1 bit 6: does it alternate with the `m` marks? If yes, polarity (ROAD=0/SUPERMOTO=1 or vice versa) → [`docs/findings/can/signal-ride-mode.md`](../findings/can/signal-ride-mode.md) at `confirmed`.
+   - `12A` D1 bit 6: does it alternate with the `m` marks? If yes, polarity (ROAD=0/SUPERMOTO=1 or vice versa) → [`docs/findings/can/signal-ride-mode.md`](../findings/can/signal-ride-mode.md) at `confirmed`, **semantics = rear-ABS-enable** (per manual: this toggle disables rear ABS and nothing else).
    - All bits in the slow-decay group: per-phase mode value. Any bit that alternates is candidate; rank by purity.
    - Cross-check against the idle baseline's LOW-CARD(2) bytes in `12A`, `12D`, `12E`, `450`, `541` — these are the most likely to be mode bits.
 2. **Phase B — trip reset.**
@@ -99,14 +99,22 @@ Three blips, increasing in aggression — single small **`t`** at the start of e
 4. **Phase D — throttle blip engine-on.**
    - `120` D2: confirm same encoding as engine-off (linear, same scale).
    - `12A` D0 bit 1 (throttle-open flag): same threshold as engine-off?
-   - `12A` D1 bit 6: does it move now (engine-on) the way it might not have engine-off? If yes, hypothesis 5 (requested-map bit) shifts toward "engine-load- or RPM-conditioned," not simply throttle-driven.
+   - `12A` D1 bit 6: should be **invariant** to throttle/RPM (per the manual, the mode bit is ABS-only and not engine-conditioned). If it moves with throttle or RPM, that contradicts the manual and is itself a finding worth flagging.
    - RPM-tracking bytes: any byte that climbs with `120` D0,D1 — engine load %, MAP-derived signal, etc. Plot suspects against decoded RPM.
+   - **`540` D1 — physical-quantity discriminator for [[signal-warmup-index]].** At warm idle this byte sits at ~0x0E (14). The three blips give three throttle/RPM excursions on top of a steady thermal background, which separates the three open candidates:
+     - **Rises with throttle** (e.g., 14 → 18-22 during the blip, returns to 14 after) → power enrichment on top of the warm-idle baseline → byte is a **fuelling enrichment %** (cold-start + power-enrichment composite). Consistent with the cold→warm 25→14 walk being warm-up enrichment dialling down.
+     - **Drops with throttle** (e.g., 14 → 11-12 during the blip) → an AFR-shaped quantity that goes richer under load. Fits the warm-idle ~14 ≈ stoich coincidence but doesn't explain the cold-start direction (cold engines run richer = lower AFR, but our cold value is *higher*) — flag as conflict, needs a separate cold-start engine-on capture to resolve.
+     - **Flat through all three blips** → byte is purely coolant-temp-keyed, independent of fuelling/load → points at **fast-idle target / idle-air-bypass position** rather than an enrichment quantity.
+     - **Moves with RPM but not with throttle position** (the blips have correlated RPM and throttle — distinguishable by looking at the recovery: throttle returns to 0 fast, RPM bleeds down slower over 1-2 s) → RPM-conditioned, not throttle-conditioned. Less likely given the data, but worth checking.
+   - Plot `540` D1 alongside `120` D2 (throttle) and decoded RPM across all three blips on one timeline; the three blips give three independent reads of the same discriminator.
 5. **Cross-phase invariants.** Coolant temp (`540` D5,D6) should drift very slightly upward across the ~3 min session. Gear should remain neutral. Side stand should remain down. Any of these moving without the corresponding input is a calibration issue with the experiment.
+6. **Mode-vs-engine independence (manual cross-check).** Per the owner's manual the mode toggle is rear-ABS-only. So between Phase A and Phase D: idle RPM, idle throttle position, and any candidate engine-load / fuelling bytes (e.g. `540` D1) should be **identical across the two modes**. If they differ, the manual is incomplete and the toggle also nudges an engine-side parameter — record as a contradicting finding.
 
 ## Expected outcomes
 
-- **`12A` D1 bit 6 alternates with mode toggle** → ride-mode finding confirmed; KTM mapping holds.
+- **`12A` D1 bit 6 alternates with mode toggle** → ride-mode (rear-ABS-enable) finding confirmed; KTM/Husqvarna platform mapping holds.
 - **Mode bit lives elsewhere** → identify and finding.
+- **No engine-side byte differs between the two modes** → consistent with the manual; mode is purely an ABS input.
 - **A momentary bit somewhere in the slow-decay group fires on each dash button press** → button-event finding, but probably multiple bits/encodings — full decode may need a follow-up dedicated session.
 - **Trip reset is a *different* bit from the short-press cluster** → consistent with a "long press detected" sentinel separate from the raw button line.
 - **Throttle decoder holds engine-on** → promote engine-off throttle finding from `provisional` (if that's how it was filed) to `confirmed` engine-on.

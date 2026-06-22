@@ -55,6 +55,8 @@ bike-dash/
 
 One markdown file per non-trivial test: `docs/experiments/YYYY-MM-DD-slug.md`. Use the template at `docs/experiments/_template.md`. Required: hypothesis, setup, result, interpretation. Link any raw data in `logs/`. Failures stay — don't delete them when the next attempt works; link forward instead.
 
+Scripted procedures (timed/ordered steps where consistency matters) get a sidecar `docs/experiments/<slug>.procedure.yaml`. The `.md` links to it; the YAML is the source of truth. Run with `python scripts/capture.py --port <port> --label <slug> --experiment <path>` — the operator screen drives the rider step-by-step and auto-logs marks at each step's cue moment. Free-form / exploratory captures don't need one. See ADR 0006.
+
 ### Findings — atomic, editable, current-state
 
 Each finding is a small file under `docs/findings/<area>/`. Cite the experiment(s) that established it. When new evidence contradicts a finding, **rewrite** the file (don't append "actually..." paragraphs) and note the flip in the contradicting experiment. The finding always reflects current best understanding.

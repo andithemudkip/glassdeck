@@ -1,0 +1,156 @@
+# Canonical signal schema for the 2020 Husqvarna Svartpilen 401 CAN bus.
+#
+# Source of truth: docs/findings/can/signal-*.md. Each entry below is the
+# index into one finding — the finding's prose is authoritative on context,
+# encoding rationale, and open questions; this file is the structured form
+# that scripts and the live visualizer consume.
+#
+# Schema per entry:
+#   name           snake_case slug, unique
+#   status         confirmed | provisional | partial
+#   finding        slug under docs/findings/can/ (.md elided)
+#   arbitration_id 11-bit CAN ID, hex
+#   byte           int (single byte) — present for bit / nibble / byte signals
+#   bytes          list[int] (multi-byte signals) — ordered most-significant first when byte_order is big
+#   byte_order     big | little — required only for multi-byte signals
+#   bit_offset     LSB-numbered offset within `byte` (default 0). Ignored for `bytes`.
+#   bit_length     number of bits the signal occupies (default 8)
+#   encoding       bool | uint | enum
+#   scale          multiplier applied to raw integer (default 1)
+#   offset         added after scale (default 0)
+#   unit           display unit string, or null
+#   values         map of raw int → label, for bool/enum rendering
+#   notes          free text, optional
+
+- name: rpm
+  status: confirmed
+  finding: signal-rpm
+  arbitration_id: 0x120
+  bytes: [0, 1]
+  byte_order: big
+  bit_length: 16
+  encoding: uint
+  scale: 1
+  offset: 0
+  unit: rpm
+  notes: "Engine-off reads exact 0. Idle ~1700 RPM. Verified to ~2100 RPM; higher range untested."
+
+- name: throttle_position
+  status: confirmed
+  finding: signal-throttle-position
+  arbitration_id: 0x120
+  byte: 2
+  bit_length: 8
+  encoding: uint
+  scale: 1
+  offset: 0
+  unit: counts
+  notes: "Full scale is 254 (not 255). Closed = 0x00. For percent, divide by 254."
+
+- name: coolant_temp
+  status: confirmed
+  finding: signal-coolant-temp
+  arbitration_id: 0x540
+  bytes: [5, 6]
+  byte_order: big
+  bit_length: 16
+  encoding: uint
+  scale: 0.1
+  offset: 0
+  unit: "°C"
+  notes: "Note Husqvarna shifts coolant one byte earlier than KTM 690 (D5,D6 vs D6,D7)."
+
+- name: warmup_index
+  status: provisional
+  finding: signal-warmup-index
+  arbitration_id: 0x540
+  byte: 1
+  bit_length: 8
+  encoding: uint
+  scale: 1
+  offset: 0
+  unit: index
+  notes: "Engine-on-gated, decreases with coolant temp. 0x00 engine-off; ~0x19 cold-start down to 0x0E at operating temp. Likely warm-up enrichment factor or fast-idle/bypass position."
+
+- name: kill_switch
+  status: confirmed
+  finding: signal-kill-switch
+  arbitration_id: 0x541
+  byte: 2
+  bit_offset: 4
+  bit_length: 1
+  encoding: bool
+  values:
+    0: STOP
+    1: RUN
+  notes: "Primary location. Redundantly broadcast at 5B0 D0 bit 4 and 121 D5 bit 2 (polarity unverified at redundant sites)."
+
+- name: side_stand
+  status: confirmed
+  finding: signal-side-stand
+  arbitration_id: 0x540
+  byte: 3
+  bit_offset: 0
+  bit_length: 1
+  encoding: bool
+  values:
+    0: DOWN
+    1: UP
+  notes: "Husqvarna shifts one byte earlier than KTM (D3 vs D4); polarity preserved."
+
+- name: gear_position
+  status: partial
+  finding: signal-gear-position
+  arbitration_id: 0x129
+  byte: 0
+  bit_offset: 4
+  bit_length: 4
+  encoding: enum
+  values:
+    0: N
+    1: "1"
+    2: "2"
+    3: "3"
+    4: "4"
+    5: "5"
+    6: "6"
+  notes: "N and 1 confirmed; 2-6 hypothesised per KTM mapping, awaiting engine-on verification."
+
+- name: shift_lever_displaced
+  status: provisional
+  finding: signal-shift-lever
+  arbitration_id: 0x129
+  byte: 0
+  bit_offset: 3
+  bit_length: 1
+  encoding: bool
+  values:
+    0: REST
+    1: DISPLACED
+  notes: "Sustained — strain-gauge / position sensor feeding the factory quick shifter."
+
+- name: shift_lever_failed
+  status: provisional
+  finding: signal-shift-lever
+  arbitration_id: 0x129
+  byte: 0
+  bit_offset: 1
+  bit_length: 1
+  encoding: bool
+  values:
+    0: OK
+    1: FAILED
+  notes: "Transient flag fired ~1.5s after a shift attempt that didn't engage. Likely source of the OEM dash '-' glyph."
+
+- name: engine_on_counter
+  status: provisional
+  finding: signal-engine-on-counter
+  arbitration_id: 0x541
+  byte: 4
+  bit_offset: 0
+  bit_length: 7
+  encoding: uint
+  scale: 1
+  offset: 0
+  unit: ticks
+  notes: "~1 Hz binary counter, 7-bit modulo 128. Bit 7 of D4 never toggled; treat as reserved. Increments only with engine running."

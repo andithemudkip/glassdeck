@@ -38,6 +38,10 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+
+from signals import byte_coords, load_signals  # type: ignore  # noqa: E402
+
 LINE_RE = re.compile(r"\((\d+\.\d+)\)\s+\S+\s+([0-9A-Fa-f]+)#([0-9A-Fa-f]*)")
 
 ALWAYS_ON_IDS = ["120", "121", "129", "12A", "12D", "12E", "450", "540", "541", "5A0", "5B0"]
@@ -259,28 +263,34 @@ def main() -> int:
         print(f"  {tag:<20}  {n}")
     print()
 
-    # Reproduce known signals as a procedural sanity check
-    known_signals = [
-        ("120", 0, "RPM hi byte → expect ENGINE-STATE"),
-        ("120", 1, "RPM lo byte → expect ENGINE-STATE"),
-        ("120", 2, "throttle → expect SINGLE-CAUSE(throttle)"),
-        ("129", 0, "gear → expect SINGLE-CAUSE(gear)"),
-        ("540", 3, "side-stand + gear → expect MULTI-CAUSE(stand,gear)"),
-        ("540", 5, "coolant hi → expect ENGINE-STATE"),
-        ("540", 6, "coolant lo → expect ENGINE-STATE"),
-        ("541", 2, "kill switch → expect SINGLE-CAUSE(kill)"),
-    ]
-    print("# Known-signal reproduction check")
-    by_key = {(r["id"], r["byte"]): r for r in rows}
-    for arb, bidx, note in known_signals:
+    # Reproduce known signals as a procedural sanity check.
+    # Coordinates derived from docs/signals/signals.yaml (ADR 0005) — adding a
+    # confirmed signal there auto-extends this check.
+    schema_signals = load_signals()
+    schema_coords = byte_coords(schema_signals)
+    print("# Known-signal reproduction check (sourced from docs/signals/signals.yaml)")
+    by_key = {(r["id"], int(r["byte"])): r for r in rows}
+    failures = 0
+    for arb, bidx, name in schema_coords:
         r = by_key.get((arb, bidx))
-        got = r["classification"] if r else "MISSING"
-        print(f"  {arb} D{bidx}  {got:<35}  ({note})")
+        if not r:
+            print(f"  {arb} D{bidx}  MISSING                              ({name})")
+            failures += 1
+            continue
+        cls = r["classification"]
+        # A confirmed signal sitting on a GLOBAL-STATIC byte means either the
+        # schema drifted or the corpus changed shape — surface it loudly.
+        flag = "  ← FAIL" if cls.startswith("GLOBAL-STATIC") else ""
+        if flag:
+            failures += 1
+        print(f"  {arb} D{bidx}  {cls:<35}  ({name}){flag}")
+    if failures:
+        print(f"  → {failures} signal byte(s) drifted from schema")
     print()
 
     # Candidate short list: anything that is not GLOBAL-STATIC and not on the known-signal list
     print("# Candidate short list (non-GLOBAL-STATIC, non-known-signal)")
-    known_set = {(a, b) for a, b, _ in known_signals}
+    known_set = {(arb, bidx) for arb, bidx, _ in schema_coords}
     candidates = [r for r in rows
                   if not r["classification"].startswith("GLOBAL-STATIC")
                   and (r["id"], r["byte"]) not in known_set]

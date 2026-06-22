@@ -1,2 +1,4 @@
 python-can>=4.3
 pyserial>=3.5
+PyYAML>=6.0
+textual>=0.80

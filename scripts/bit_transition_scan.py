@@ -40,6 +40,7 @@ from cross_session_diff import (  # type: ignore
     SESSIONS,
     session_window,
 )
+from signals import bit_coords, load_signals  # type: ignore  # noqa: E402
 
 ACTIVE_TOGGLE_COUNT = 2  # treat a session as "active" if the bit toggled at least N times
 FAST_RATE = 0.05         # rate above which we consider the bit toggling fast (RPM-like)
@@ -180,19 +181,37 @@ def main() -> int:
         print(f"  ... and {len(mixed)-30} more")
     print()
 
-    # Reproduce known signals
-    print("# Known-signal reproduction check (bit-level)")
-    known = [
-        ("541", 2, 4, "kill switch → expect SESSION-CONTRAST high=kill"),
-        ("540", 3, 0, "side stand → expect SESSION-CONTRAST high=stand"),
+    # Reproduce known signals — schema half is auto-derived from
+    # docs/signals/signals.yaml (ADR 0005); the unattributed-bit study
+    # targets stay as a script-local literal because they aren't promoted
+    # signals (they're hypotheses this scan exists to refine).
+    schema_bits = [
+        (arb, byte, bit, name) for arb, byte, bit, name in bit_coords(load_signals())
+    ]
+    study_targets = [
         ("540", 2, 6, "ignition-permission → expect ENGINE-CONTRAST + kill in high"),
         ("540", 3, 4, "ignition-permission → expect ENGINE-CONTRAST + kill in high"),
         ("121", 5, 3, "engine-state → expect ENGINE-CONTRAST"),
-        ("129", 0, 3, "shift lever displaced → expect SESSION-CONTRAST high=gear"),
-        ("129", 0, 1, "shift failed → expect SESSION-CONTRAST high=gear"),
     ]
+    print("# Known-signal reproduction check — bit-level (schema-sourced)")
     lookup = {(b["id"], b["byte"], b["bit"]): b for b in all_bits}
-    for arb, byte, bit, note in known:
+    failures = 0
+    for arb, byte, bit, name in schema_bits:
+        b = lookup.get((arb, byte, bit))
+        if not b:
+            print(f"  {arb} {byte}:{bit}  MISSING                                  ({name})")
+            failures += 1
+            continue
+        rates = {k: round(v['toggle_rate'], 3) for k, v in b['per_session'].items() if v['toggle_rate'] > 0}
+        flag = "  ← FAIL" if b['tag'] == 'GLOBAL-CONSTANT' else ""
+        if flag:
+            failures += 1
+        print(f"  {arb} {byte}:{bit}  {b['tag']:<17} rates>0: {rates}  ({name}){flag}")
+    if failures:
+        print(f"  → {failures} schema bit(s) drifted")
+    print()
+    print("# Unattributed bit study targets")
+    for arb, byte, bit, note in study_targets:
         b = lookup.get((arb, byte, bit))
         if not b:
             print(f"  {arb} {byte}:{bit}  MISSING — ({note})")

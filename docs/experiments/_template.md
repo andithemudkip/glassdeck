@@ -22,6 +22,8 @@ Bike state (engine, key, gear). Hardware in use. Firmware version / script used.
 
 Steps taken, in order. Enough detail to reproduce.
 
+*If consistent timing or step ordering matters (e.g. N toggles with fixed settles), also author a `<slug>.procedure.yaml` sidecar and run with `python scripts/capture.py --experiment <path>`. The operator screen drives the rider step-by-step and auto-logs marks at each cue. See ADR 0006.*
+
 ## Result
 
 What actually happened. Numbers, observations, screenshots, or links to raw captures under `logs/`.
