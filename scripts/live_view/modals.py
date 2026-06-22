@@ -1,8 +1,14 @@
-"""Modal overlay screens: legend popup, watch-pin search, unpin picker."""
+"""Modal overlay screens: legend popup, watch-pin search, unpin picker,
+hypothesis-capture form."""
 
 from __future__ import annotations
 
+import math
+from dataclasses import dataclass
+from typing import Literal
+
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Input, ListItem, ListView, Static
@@ -10,6 +16,50 @@ from textual.widgets import Input, ListItem, ListView, Static
 from signals import Signal
 
 from .state import WatchPin
+
+
+# Rows passed into HypothesisModal — snapshotted at open-time from the
+# pane state so numbered selection stays stable while the operator types.
+
+@dataclass(frozen=True)
+class HypothesisByteRow:
+    arb: int
+    byte: int
+    value: int
+    short_range: int
+    ratio: float          # math.inf for first-activity
+    shape: str            # "" if classifier returned nothing
+    first_activity: bool
+
+
+@dataclass(frozen=True)
+class HypothesisBitRow:
+    arb: int
+    byte: int
+    bit: int
+    transition: str       # "0→1" / "1→0"
+    z: float              # math.inf for warmup
+    mu: float
+    sigma: float
+
+
+@dataclass(frozen=True)
+class HypothesisResult:
+    """Returned from HypothesisModal.dismiss(). Kind branches the YAML
+    stanza shape and the WatchPin construction at app.py:_on_hypothesis_submit."""
+
+    kind: Literal["byte", "bit"]
+    name: str
+    arb: int
+    byte: int
+    bit: int | None          # bit_offset for kind="bit", else None
+    bit_length: int          # 8 for byte, 1 for bit
+    encoding: str
+    pin_to_watch: bool
+    # Echoed-through context for the YAML `notes` field — keeps the
+    # capture-time breadcrumbs visible in `hypotheses.yaml` for the next
+    # session to reason about (ADR 0010 §3).
+    notes_ctx: dict
 
 
 class LegendScreen(ModalScreen):
@@ -198,3 +248,242 @@ class UnpinModal(_CenteredModal):
             return int(name) if name is not None else None
         except ValueError:
             return None
+
+
+# Encoding defaults per ADR 0010 §3 (classifier shape → encoding string).
+_SHAPE_TO_ENCODING = {
+    "sensor": "uint",
+    "boolean": "bool",
+    "counter": "uint",
+    "step": "enum",
+}
+
+
+class HypothesisModal(_CenteredModal):
+    """Capture a hypothesis from the live discovery surface (ADR 0010 §3).
+
+    Two tabs — bytes (rows from the active-unknown-bytes pane) and bits
+    (rows from the continuous-anomaly pane). Operator picks a row,
+    optionally edits name / encoding, optionally pins to watch, submits.
+    The modal returns a HypothesisResult; the parent screen writes the
+    YAML stanza and adds the watch pin (see app.py:_on_hypothesis_submit).
+    """
+
+    CSS = f"""
+    HypothesisModal {{ align: center middle; }}
+    #hyp-box      {{ width: 90; max-height: 24; {_MODAL_BOX_CSS} }}
+    #hyp-list     {{ height: auto; max-height: 10; }}
+    #hyp-name     {{ height: 3; }}
+    #hyp-encoding {{ height: 3; }}
+    #hyp-pin      {{ height: 1; }}
+    #hyp-tabhint  {{ height: 1; }}
+    #hyp-foot     {{ height: 1; }}
+    """
+
+    # priority=True so Input doesn't swallow Tab and Ctrl+P. Enter is
+    # handled via on_input_submitted instead (matches WatchModal).
+    BINDINGS = [
+        Binding("tab", "switch_tab", show=False, priority=True),
+        Binding("ctrl+p", "toggle_pin", show=False, priority=True),
+        Binding("escape", "cancel", show=False, priority=True),
+    ]
+
+    def __init__(
+        self,
+        bytes_rows: list[HypothesisByteRow],
+        bits_rows: list[HypothesisBitRow],
+    ) -> None:
+        super().__init__()
+        self._bytes_rows = bytes_rows
+        self._bits_rows = bits_rows
+        self._tab: Literal["bytes", "bits"] = "bytes"
+        self._pin: bool = True
+        # Track which list row is selected per-tab so toggling Tab back
+        # restores what the operator had highlighted (avoids re-finding
+        # row 3 on the bytes tab after a glance at bits).
+        self._sel: dict[str, int] = {"bytes": 0, "bits": 0}
+
+    # ---- compose ----------------------------------------------------------
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="hyp-box"):
+            yield Static("[bold]Capture hypothesis[/bold]")
+            yield Static("", id="hyp-tabhint")
+            yield ListView(id="hyp-list")
+            yield Input(placeholder="signal name (required)", id="hyp-name")
+            yield Input(placeholder="encoding (uint / bool / enum)", id="hyp-encoding")
+            yield Static("", id="hyp-pin")
+            yield Static(
+                "[dim]Tab switch tab · ↑↓ pick row · Enter submit · "
+                "Ctrl-P toggle pin · Esc cancel[/dim]",
+                id="hyp-foot",
+            )
+
+    def on_mount(self) -> None:
+        self._refresh_tab_hint()
+        self._refresh_list()
+        self._refresh_pin_static()
+        # Encoding default needs the initial selection's shape.
+        self._refresh_encoding_default()
+        self.query_one("#hyp-name", Input).focus()
+
+    # ---- tab / list -------------------------------------------------------
+
+    def _refresh_tab_hint(self) -> None:
+        if self._tab == "bytes":
+            txt = f"[bold green]Bytes[/bold green]  •  [dim]Bits[/dim]  ({len(self._bytes_rows)} rows)"
+        else:
+            txt = f"[dim]Bytes[/dim]  •  [bold green]Bits[/bold green]  ({len(self._bits_rows)} rows)"
+        self.query_one("#hyp-tabhint", Static).update(txt)
+
+    def _refresh_list(self) -> None:
+        lv = self.query_one("#hyp-list", ListView)
+        lv.clear()
+        if self._tab == "bytes":
+            for i, r in enumerate(self._bytes_rows):
+                ratio_str = "∞" if math.isinf(r.ratio) else f"{r.ratio:.1f}×"
+                shape = f"  [dim]{r.shape}[/dim]" if r.shape else ""
+                first = "  [dim](first activity)[/dim]" if r.first_activity else ""
+                lv.append(
+                    ListItem(
+                        Static(
+                            f"  {i + 1:>2}. 0x{r.arb:03X} D{r.byte}   "
+                            f"value={r.value:>3} / 0x{r.value:02X}   "
+                            f"range {r.short_range:>4}   ratio={ratio_str}{shape}{first}"
+                        ),
+                        name=str(i),
+                    )
+                )
+        else:
+            for i, r in enumerate(self._bits_rows):
+                if math.isinf(r.z):
+                    score = "z=∞ (warmup)"
+                else:
+                    score = f"z={r.z:.1f}  μ={r.mu:.2f}s ±{r.sigma:.2f}s"
+                lv.append(
+                    ListItem(
+                        Static(
+                            f"  {i + 1:>2}. 0x{r.arb:03X} D{r.byte}.b{r.bit}   "
+                            f"{r.transition}   {score}"
+                        ),
+                        name=str(i),
+                    )
+                )
+        rows = self._bytes_rows if self._tab == "bytes" else self._bits_rows
+        if rows:
+            lv.index = min(self._sel[self._tab], len(rows) - 1)
+
+    def _current_index(self) -> int | None:
+        lv = self.query_one("#hyp-list", ListView)
+        if lv.index is None:
+            return None
+        rows = self._bytes_rows if self._tab == "bytes" else self._bits_rows
+        if 0 <= lv.index < len(rows):
+            return lv.index
+        return None
+
+    def _refresh_encoding_default(self) -> None:
+        idx = self._current_index()
+        if idx is None:
+            return
+        encoding_input = self.query_one("#hyp-encoding", Input)
+        # Don't overwrite a value the operator has already typed.
+        if encoding_input.value.strip():
+            return
+        if self._tab == "bytes":
+            shape = self._bytes_rows[idx].shape
+            default = _SHAPE_TO_ENCODING.get(shape, "uint")
+        else:
+            default = "bool"
+        encoding_input.value = default
+
+    def _refresh_pin_static(self) -> None:
+        mark = "x" if self._pin else " "
+        self.query_one("#hyp-pin", Static).update(
+            f"  [{mark}] pin to watch panel  [dim](Ctrl-P to toggle)[/dim]"
+        )
+
+    # ---- input ------------------------------------------------------------
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def action_switch_tab(self) -> None:
+        # Persist current selection before switching tabs.
+        idx = self._current_index()
+        if idx is not None:
+            self._sel[self._tab] = idx
+        self._tab = "bits" if self._tab == "bytes" else "bytes"
+        self._refresh_tab_hint()
+        self._refresh_list()
+        # Reset encoding so the new tab's default applies. Only clear if
+        # the value matches a known default — otherwise the operator
+        # typed something custom and we shouldn't stomp on it.
+        encoding_input = self.query_one("#hyp-encoding", Input)
+        if encoding_input.value.strip() in {"", "uint", "bool", "enum"}:
+            encoding_input.value = ""
+        self._refresh_encoding_default()
+
+    def action_toggle_pin(self) -> None:
+        self._pin = not self._pin
+        self._refresh_pin_static()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        result = self._build_result()
+        self.dismiss(result)
+
+    def on_list_view_highlighted(self, event) -> None:
+        # Selection changed via ↑/↓ — refresh the encoding default if the
+        # encoding field is still on its prefill (operator hasn't customized).
+        self._refresh_encoding_default()
+
+    # ---- submit -----------------------------------------------------------
+
+    def _build_result(self) -> HypothesisResult | None:
+        idx = self._current_index()
+        if idx is None:
+            return None
+        name = self.query_one("#hyp-name", Input).value.strip()
+        if not name:
+            return None
+        encoding = self.query_one("#hyp-encoding", Input).value.strip() or "uint"
+        if self._tab == "bytes":
+            r = self._bytes_rows[idx]
+            ratio_str = "∞" if math.isinf(r.ratio) else f"{r.ratio:.1f}×"
+            notes_ctx = {
+                "range": r.short_range,
+                "ratio": ratio_str,
+                "shape": r.shape or "—",
+                "first_activity": r.first_activity,
+            }
+            return HypothesisResult(
+                kind="byte",
+                name=name,
+                arb=r.arb,
+                byte=r.byte,
+                bit=None,
+                bit_length=8,
+                encoding=encoding,
+                pin_to_watch=self._pin,
+                notes_ctx=notes_ctx,
+            )
+        else:
+            r = self._bits_rows[idx]
+            z_str = "∞" if math.isinf(r.z) else f"{r.z:.1f}"
+            notes_ctx = {
+                "transition": r.transition,
+                "z": z_str,
+                "mu": r.mu,
+                "sigma": r.sigma,
+            }
+            return HypothesisResult(
+                kind="bit",
+                name=name,
+                arb=r.arb,
+                byte=r.byte,
+                bit=r.bit,
+                bit_length=1,
+                encoding=encoding,
+                pin_to_watch=self._pin,
+                notes_ctx=notes_ctx,
+            )

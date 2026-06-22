@@ -32,7 +32,15 @@ from .constants import (
     SIGMA_FLOOR,
     STALE_AFTER_SECS,
 )
-from .modals import LegendScreen, UnpinModal, WatchModal
+from .modals import (
+    HypothesisBitRow,
+    HypothesisByteRow,
+    HypothesisModal,
+    HypothesisResult,
+    LegendScreen,
+    UnpinModal,
+    WatchModal,
+)
 from .screens import AnalysisScreen, OperatorScreen
 from .state import (
     BaselineStats,
@@ -56,6 +64,14 @@ class LiveView(App):
         Binding("tab", "toggle_screen", "switch", show=False, priority=True),
         Binding("space", "toggle_pause", "pause", show=False, priority=True),
         Binding("left", "prev_step", "prev", show=False, priority=True),
+        # ADR 0010 §2 — hot-tunable thresholds. Modifier+arrow because
+        # every printable char is reserved for mark hotkeys (capture.py).
+        Binding("ctrl+up", "bump_z(0.5)", show=False, priority=True),
+        Binding("ctrl+down", "bump_z(-0.5)", show=False, priority=True),
+        Binding("alt+up", "bump_ratio(0.5)", show=False, priority=True),
+        Binding("alt+down", "bump_ratio(-0.5)", show=False, priority=True),
+        Binding("ctrl+d", "toggle_d7", show=False, priority=True),
+        Binding("ctrl+y", "toggle_suppressed", show=False, priority=True),
     ]
 
     SCREENS = {"analysis": AnalysisScreen, "operator": OperatorScreen}
@@ -188,6 +204,23 @@ class LiveView(App):
             self.bridge.stop.set()
             self.exit()
             return
+        # Ctrl+N opens the hypothesis modal (ADR 0010 §3). Handled by
+        # event.key (not event.character) so the underlying 'n' never
+        # reaches the printable-mark fallback below — keeps the "n →
+        # neutral mark" hotkey intact when chorded with Ctrl.
+        if event.key == "ctrl+n":
+            event.stop()
+            if not isinstance(
+                self.screen,
+                (WatchModal, UnpinModal, LegendScreen, HypothesisModal),
+            ):
+                rows_bytes = self._snapshot_active_byte_rows()
+                rows_bits = self._snapshot_anomaly_bit_rows()
+                self.push_screen(
+                    HypothesisModal(rows_bytes, rows_bits),
+                    self._on_hypothesis_submit,
+                )
+            return
         if not ch:
             return
         if ch == "?":
@@ -251,6 +284,22 @@ class LiveView(App):
         )
         self.step_index = new_index
         self._start_step(new_index, fire_mark=False)
+
+    # ADR 0010 §2 — hot-tunable thresholds. No explicit refresh call — the
+    # 4 Hz tick picks up the new value on its next pass, which is exactly
+    # the "watch the pane respond" feedback the ADR wants.
+
+    def action_bump_z(self, delta: float) -> None:
+        self.z_threshold = max(0.5, self.z_threshold + delta)
+
+    def action_bump_ratio(self, delta: float) -> None:
+        self.byte_activity_ratio = max(0.5, self.byte_activity_ratio + delta)
+
+    def action_toggle_d7(self) -> None:
+        self.show_d7 = not self.show_d7
+
+    def action_toggle_suppressed(self) -> None:
+        self.show_suppressed = not self.show_suppressed
 
     # ---- frame consumer ---------------------------------------------------
 
@@ -388,6 +437,173 @@ class LiveView(App):
         self.window_label = label
         self.window_end_ts = ts + FLIP_WINDOW_SECS
         self.last_event_ts = ts
+
+    # ---- hypothesis capture (ADR 0010 §3) -------------------------------
+
+    def _snapshot_active_byte_rows(self) -> list[HypothesisByteRow]:
+        """Freeze the current active-unknown-bytes pane rows for the modal.
+
+        Mirrors the filter logic in `active_bytes_text()` so the modal
+        shows the same rows the operator was just looking at. Sorted by
+        ratio descending; capped at ACTIVE_BYTES_PANE_ROWS so the modal
+        list and the pane agree on which rows are 'top'."""
+        now = time.time()
+        rows: list[tuple[float, HypothesisByteRow]] = []
+        for (arb, byte), stats in self.byte_activity.items():
+            if (arb, byte) in self._byte_index:
+                continue
+            if byte == 7 and not self.show_d7:
+                continue
+            buf = stats.buffer
+            if len(buf) < 2:
+                continue
+            lo = min(v for _, v in buf)
+            hi = max(v for _, v in buf)
+            short_range = hi - lo
+            threshold = max(
+                BASELINE_FLOOR, self.byte_activity_ratio * stats.baseline_range_ewma
+            )
+            active_now = short_range > threshold
+            in_tail = (
+                stats.last_active_ts is not None
+                and now - stats.last_active_ts < self.byte_activity_hysteresis_secs
+            )
+            if not (active_now or in_tail):
+                continue
+            cur = self.current_bytes.get((arb, byte), 0)
+            first_activity = stats.baseline_range_ewma <= BASELINE_FLOOR
+            ratio = math.inf if first_activity else short_range / stats.baseline_range_ewma
+            shape = "" if first_activity else classify_byte([v for _, v in buf])
+            rows.append(
+                (
+                    ratio,
+                    HypothesisByteRow(
+                        arb=arb,
+                        byte=byte,
+                        value=cur,
+                        short_range=int(short_range),
+                        ratio=ratio,
+                        shape=shape,
+                        first_activity=first_activity,
+                    ),
+                )
+            )
+        rows.sort(key=lambda r: -r[0])
+        return [r for _, r in rows[:ACTIVE_BYTES_PANE_ROWS]]
+
+    def _snapshot_anomaly_bit_rows(self) -> list[HypothesisBitRow]:
+        """Freeze the continuous-anomaly pane rows for the modal — one
+        entry per (arb, byte, bit) within retention_secs, keeping the
+        most recent transition / z snapshot. Sorted newest-first."""
+        now = time.time()
+        cutoff = now - self.retention_secs
+        # Walk newest → oldest, keep first hit per key.
+        seen: dict[tuple[int, int, int], HypothesisBitRow] = {}
+        order: list[tuple[int, int, int]] = []
+        for ts, arb, byte, bit, transition, _interval, z, mu, sigma in reversed(
+            self.recent_anomalies
+        ):
+            if ts < cutoff:
+                continue
+            key = (arb, byte, bit)
+            if key in seen:
+                continue
+            seen[key] = HypothesisBitRow(
+                arb=arb,
+                byte=byte,
+                bit=bit,
+                transition=transition,
+                z=z,
+                mu=mu,
+                sigma=sigma,
+            )
+            order.append(key)
+        return [seen[k] for k in order[:DISCOVERY_PANE_ROWS]]
+
+    def _on_hypothesis_submit(self, result: HypothesisResult | None) -> None:
+        if result is None:
+            return
+        if self.session_dir is None:
+            try:
+                self.notify(
+                    "hypotheses need a real session — relaunch without --watch.",
+                    severity="warning",
+                    timeout=3,
+                )
+            except Exception:
+                pass
+            return
+        self._append_hypothesis(result)
+        self.events_log.log("hypothesis", result.name)
+        if result.pin_to_watch:
+            pin = self._watch_pin_for_hypothesis(result)
+            if pin is not None:
+                self._add_watch_pin(pin)
+
+    def _append_hypothesis(self, result: HypothesisResult) -> None:
+        """Append one YAML stanza to <session_dir>/hypotheses.yaml.
+
+        Stream-appended: every call writes a one-element list document,
+        so the file is `yaml.safe_load_all`-able even mid-session. The
+        format mirrors `docs/signals/signals.yaml` so a future
+        promote-hypothesis script becomes a straight key-by-key carry."""
+        assert self.session_dir is not None
+        import yaml  # lazy: same convention as scripts/signals.py
+
+        ts_iso = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
+        if result.kind == "byte":
+            ctx = result.notes_ctx
+            notes = (
+                f"Captured live {ts_iso}; range {ctx['range']}, "
+                f"ratio {ctx['ratio']}, shape={ctx['shape']}."
+            )
+            payload: dict = {
+                "name": result.name,
+                "status": "hypothesis",
+                "arbitration_id": f"0x{result.arb:03X}",
+                "byte": result.byte,
+                "bit_length": result.bit_length,
+                "encoding": result.encoding,
+                "scale": 1,
+                "offset": 0,
+                "notes": notes,
+            }
+        else:
+            ctx = result.notes_ctx
+            notes = (
+                f"Captured live {ts_iso}; transition {ctx['transition']}, "
+                f"z={ctx['z']}, μ={ctx['mu']:.2f}s, σ={ctx['sigma']:.2f}s."
+            )
+            payload = {
+                "name": result.name,
+                "status": "hypothesis",
+                "arbitration_id": f"0x{result.arb:03X}",
+                "byte": result.byte,
+                "bit_offset": result.bit,
+                "bit_length": result.bit_length,
+                "encoding": result.encoding,
+                "scale": 1,
+                "offset": 0,
+                "notes": notes,
+            }
+        path = self.session_dir / "hypotheses.yaml"
+        with path.open("a") as f:
+            yaml.safe_dump([payload], f, sort_keys=False, allow_unicode=True)
+
+    def _watch_pin_for_hypothesis(self, result: HypothesisResult) -> WatchPin | None:
+        """Build a raw-triplet WatchPin for the captured row. Always raw
+        (kind='raw') since the signal isn't in signals.yaml yet — that's
+        the entire point of capturing a hypothesis."""
+        if result.kind == "byte":
+            # Watch pane works at bit granularity; pin bit 0 of the byte
+            # as a placeholder. The operator can always pin a richer view
+            # via `w` once the signal lands in signals.yaml.
+            arb, byte, bit = result.arb, result.byte, 0
+        else:
+            assert result.bit is not None
+            arb, byte, bit = result.arb, result.byte, result.bit
+        label = f"hyp:{result.name}  (0x{arb:03X} D{byte}.{bit})"
+        return WatchPin(kind="raw", label=label, raw=(arb, byte, bit))
 
     def _handle_snapshot(self) -> None:
         if self.session_dir is None:
@@ -536,6 +752,86 @@ class LiveView(App):
                 f"  {pin.label:24s}  {value_str:>10}   {spark}   [dim]{pin.label}[/dim]"
             )
         return header + "\n" + "\n".join(body)
+
+    # ---- collapsed-pane summaries (ADR 0010 §1) --------------------------
+    # Each one renders the pane's header followed by a brief content
+    # summary — the layout doesn't shift because the screen only swaps
+    # CSS height + content text, never tree structure.
+
+    def watch_summary(self) -> str:
+        n = len(self.watch_pins)
+        return f"[bold]Watch[/bold]  [dim][{n} pin{'s' if n != 1 else ''}][/dim]"
+
+    def decoded_summary(self) -> str:
+        now = time.time()
+        named = len(self.signals)
+        live = sum(1 for sig in self.signals if sig.name in self.latest)
+        stale = sum(
+            1
+            for sig in self.signals
+            if (entry := self.latest.get(sig.name)) is not None
+            and now - entry[2] > STALE_AFTER_SECS
+        )
+        return (
+            f"[bold]Decoded signals[/bold]  "
+            f"[dim][{live}/{named} live, {stale} stale][/dim]"
+        )
+
+    def flipped_summary(self) -> str:
+        if self.window_label is None:
+            return "[bold]Flipped bits[/bold]  [dim](no mark yet)[/dim]"
+        known = len(self._known_signal_rows())
+        unknown = len(self._unknown_pane_groups())
+        return (
+            f"[bold]Flipped bits[/bold]  "
+            f"[dim][{known} known / {unknown} unknown, {self.window_label}][/dim]"
+        )
+
+    def discovery_summary(self) -> str:
+        # Count distinct (arb, byte, bit) triplets currently in the
+        # retention window. Cheaper than a full group — the operator just
+        # wants "how busy is this pane right now."
+        now = time.time()
+        cutoff = now - self.retention_secs
+        seen: set[tuple[int, int, int]] = set()
+        for ts, arb, byte, bit, *_ in self.recent_anomalies:
+            if ts >= cutoff:
+                seen.add((arb, byte, bit))
+        return (
+            f"[bold]Live anomalies[/bold]  "
+            f"[dim][{len(seen)} bit{'s' if len(seen) != 1 else ''}, z ≥ {self.z_threshold:.1f}][/dim]"
+        )
+
+    def active_bytes_summary(self) -> str:
+        # Mirror the filtering in active_bytes_text() so the count matches
+        # what the operator would see if the pane were expanded.
+        now = time.time()
+        rows = 0
+        for (arb, byte), stats in self.byte_activity.items():
+            if (arb, byte) in self._byte_index:
+                continue
+            if byte == 7 and not self.show_d7:
+                continue
+            buf = stats.buffer
+            if len(buf) < 2:
+                continue
+            lo = min(v for _, v in buf)
+            hi = max(v for _, v in buf)
+            short_range = hi - lo
+            threshold = max(
+                BASELINE_FLOOR, self.byte_activity_ratio * stats.baseline_range_ewma
+            )
+            active_now = short_range > threshold
+            in_tail = (
+                stats.last_active_ts is not None
+                and now - stats.last_active_ts < self.byte_activity_hysteresis_secs
+            )
+            if active_now or in_tail:
+                rows += 1
+        return (
+            f"[bold]Active unknown bytes[/bold]  "
+            f"[dim][{rows} row{'s' if rows != 1 else ''}, ratio ≥ {self.byte_activity_ratio:.1f}×][/dim]"
+        )
 
     def decoded_text(self) -> str:
         now = time.time()
@@ -895,6 +1191,11 @@ class LiveView(App):
         hh, rem = divmod(elapsed, 3600)
         mm, ss = divmod(rem, 60)
         extra_str = f"   {extra}" if extra else ""
+        tunables = (
+            f"z={self.z_threshold:.1f}  ratio={self.byte_activity_ratio:.1f}×  "
+            f"d7={'on' if self.show_d7 else 'off'}  "
+            f"suppressed={'on' if self.show_suppressed else 'off'}"
+        )
         return (
             f"[bold]Status[/bold]  "
             f"[{hh:02d}:{mm:02d}:{ss:02d}]   "
@@ -902,5 +1203,7 @@ class LiveView(App):
             f"ids {len(self.unique_ids):>3}   "
             f"marks {self.events_log.count:>3}   "
             f"snapshots {self.snapshot_seq}{extra_str}{dropped}\n"
-            f"[dim]Press hotkey to mark; '.' snapshot; '?' legend; 'q' quit[/dim]"
+            f"[dim]{tunables}[/dim]\n"
+            f"[dim]hotkey mark · '.' snap · '?' legend · 'q' quit · "
+            f"Ctrl-↑↓ z · Alt-↑↓ ratio · Ctrl-D D7 · Ctrl-Y supp · Ctrl-N hyp · Ctrl-1..5 fold[/dim]"
         )

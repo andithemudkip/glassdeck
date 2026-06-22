@@ -9,6 +9,7 @@ import math
 from typing import TYPE_CHECKING
 
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Static
@@ -17,6 +18,12 @@ from .constants import PREVIEW_LOOKAHEAD
 
 if TYPE_CHECKING:
     from .app import LiveView
+
+
+# Pane indices (top-to-bottom, excluding the always-visible status pane).
+# `flipped-row` is one cycle slot — the side-by-side known/unknown panes
+# share their container, so they collapse together (ADR 0010 §1).
+PANE_IDS = ["watch", "decoded", "flipped-row", "discovery", "active-bytes"]
 
 
 class AnalysisScreen(Screen):
@@ -31,8 +38,27 @@ class AnalysisScreen(Screen):
     #flipped-unknown { width: 1fr; height: 100%; border: round yellow; padding: 0 1; }
     #discovery       { height: 10; border: round magenta; padding: 0 1; }
     #active-bytes    { height: 12; border: round red;     padding: 0 1; }
-    #status          { height: 3;  border: round white;  padding: 0 1; }
+    #status          { height: 4;  border: round white;  padding: 0 1; }
+
+    #watch.collapsed,
+    #decoded.collapsed,
+    #discovery.collapsed,
+    #active-bytes.collapsed { height: 3; min-height: 3; max-height: 3; }
+    #flipped-row.collapsed { height: 3; }
     """
+
+    BINDINGS = [
+        Binding("ctrl+1", "toggle_pane(0)", "collapse watch", show=False),
+        Binding("ctrl+2", "toggle_pane(1)", "collapse decoded", show=False),
+        Binding("ctrl+3", "toggle_pane(2)", "collapse flipped", show=False),
+        Binding("ctrl+4", "toggle_pane(3)", "collapse discovery", show=False),
+        Binding("ctrl+5", "toggle_pane(4)", "collapse active-bytes", show=False),
+    ]
+
+    def __init__(self) -> None:
+        super().__init__()
+        # Session-local; resets to all-expanded on each launch by design.
+        self.is_collapsed: dict[int, bool] = {i: False for i in range(len(PANE_IDS))}
 
     def compose(self) -> ComposeResult:
         yield Vertical(
@@ -51,16 +77,56 @@ class AnalysisScreen(Screen):
     def on_mount(self) -> None:
         self.refresh_panes()
 
+    def action_toggle_pane(self, idx: int) -> None:
+        if idx not in self.is_collapsed:
+            return
+        self.is_collapsed[idx] = not self.is_collapsed[idx]
+        # Apply the CSS class immediately; refresh_panes() will repaint
+        # content. The class lives on the container for flipped-row so
+        # the height collapses with both children inside it.
+        self._apply_collapse_classes()
+        self.refresh_panes()
+
+    def _apply_collapse_classes(self) -> None:
+        for idx, pane_id in enumerate(PANE_IDS):
+            try:
+                widget = self.query_one(f"#{pane_id}")
+            except Exception:
+                continue
+            widget.set_class(self.is_collapsed[idx], "collapsed")
+
     def refresh_panes(self) -> None:
         app: LiveView = self.app  # type: ignore[assignment]
         try:
-            self.query_one("#watch", Static).update(app.watch_text())
-            self.query_one("#decoded", Static).update(app.decoded_text())
-            known_text, unknown_text = app.flipped_texts()
-            self.query_one("#flipped-known", Static).update(known_text)
-            self.query_one("#flipped-unknown", Static).update(unknown_text)
-            self.query_one("#discovery", Static).update(app.discovery_text())
-            self.query_one("#active-bytes", Static).update(app.active_bytes_text())
+            self._apply_collapse_classes()
+            # Watch
+            if self.is_collapsed[0]:
+                self.query_one("#watch", Static).update(app.watch_summary())
+            else:
+                self.query_one("#watch", Static).update(app.watch_text())
+            # Decoded
+            if self.is_collapsed[1]:
+                self.query_one("#decoded", Static).update(app.decoded_summary())
+            else:
+                self.query_one("#decoded", Static).update(app.decoded_text())
+            # Flipped (known + unknown share one collapse slot)
+            if self.is_collapsed[2]:
+                self.query_one("#flipped-known", Static).update(app.flipped_summary())
+                self.query_one("#flipped-unknown", Static).update("")
+            else:
+                known_text, unknown_text = app.flipped_texts()
+                self.query_one("#flipped-known", Static).update(known_text)
+                self.query_one("#flipped-unknown", Static).update(unknown_text)
+            # Discovery
+            if self.is_collapsed[3]:
+                self.query_one("#discovery", Static).update(app.discovery_summary())
+            else:
+                self.query_one("#discovery", Static).update(app.discovery_text())
+            # Active bytes
+            if self.is_collapsed[4]:
+                self.query_one("#active-bytes", Static).update(app.active_bytes_summary())
+            else:
+                self.query_one("#active-bytes", Static).update(app.active_bytes_text())
             self.query_one("#status", Static).update(app.status_text())
         except Exception:
             pass
@@ -78,7 +144,7 @@ class OperatorScreen(Screen):
     #op-countdown { height: 5; content-align: center middle; }
     #op-preview   { height: 5; padding: 0 4; }
     #op-help      { height: 1; padding: 0 2; }
-    #op-status    { dock: bottom; height: 3; border: round white; padding: 0 1; }
+    #op-status    { dock: bottom; height: 4; border: round white; padding: 0 1; }
     """
 
     def compose(self) -> ComposeResult:

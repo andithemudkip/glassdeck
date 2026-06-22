@@ -10,5 +10,6 @@ Examples to seed:
 - `husqvarna-community-notes.md` — running bucket of forum/Reddit snippets about Husqvarna 401 CAN signals
 - `projectpilen.md` — closed-source community dashboard
 - `bad-winners-dashboard.md` — closed-source commercial replacement
+- `svartpilen-401-dash-user-manual.md` - official Svartpilen 401 user manual dash-related pages
 
 References are inputs, not conclusions. Anything we verify on our own bike goes into `docs/findings/` and cites the reference.

@@ -1,6 +1,6 @@
 # Capturing — operator's guide
 
-Practical instructions for running `capture.py` and reading the live TUI. For the *why* (architecture, threading model, decode path) read ADR 0005–0007 and `scripts/live_view/__init__.py`.
+Practical instructions for running `capture.py` and reading the live TUI. For the *why* (architecture, threading model, decode path) read ADR 0005–0010 and `scripts/live_view/__init__.py`.
 
 ---
 
@@ -78,6 +78,36 @@ The watch row stays at the top of the analysis screen as long as the app runs. P
 
 Useful when you've half-identified a bit and want to *watch* it react to other inputs before promoting to a finding.
 
+### "I just surfaced a likely signal and want to record it without breaking flow"
+
+Press `Ctrl-N`. A modal opens listing the top rows currently in the **Active unknown bytes** pane (default tab) and, on `Tab`, the **Live anomalies** pane. Workflow:
+
+1. Pick the row with `↑`/`↓` — the highlighted row is the one that'll be captured.
+2. Type a working name (e.g. `throttle_hint`). Required.
+3. Encoding is pre-filled from the classifier (`sensor`→`uint`, `boolean`→`bool`, `counter`→`uint`, `step`→`enum`; bit rows default to `bool`). Edit if you have a better guess.
+4. `Ctrl-P` toggles the "pin to watch" checkbox (defaults on).
+5. `Enter` submits; `Esc` cancels.
+
+The stanza lands in `<session_dir>/hypotheses.yaml` (created on first capture, append-only thereafter):
+
+```yaml
+- name: throttle_hint
+  status: hypothesis
+  arbitration_id: '0x290'
+  byte: 2
+  bit_length: 8
+  encoding: uint
+  scale: 1
+  offset: 0
+  notes: Captured live 2026-06-22T14:32:01; range 142, ratio 23.5×, shape=sensor.
+```
+
+A `hypothesis` mark also lands in `events.csv` so you can locate the moment in the raw capture later. If "pin to watch" was on, the row also appears in the Watch pane immediately.
+
+**`hypotheses.yaml` is not a finding.** Per the project's golden rule, hypotheses become findings (and entries in `docs/signals/signals.yaml`) only after a confirming experiment. The session file is the raw material the next experiment is designed around.
+
+`--watch` mode disables capture (no session dir to write into); the modal pops a notification and bails.
+
 ### "I'm running a rider through a scripted procedure"
 
 Write the procedure as `docs/experiments/<slug>.procedure.yaml` (see ADR 0006 for schema, and the `--experiment` flag's help text). Then:
@@ -150,6 +180,14 @@ Any other printable key gets recorded raw — label it later from your notes.
 | `.` | Dump current flipped table to `snapshot-<n>.json` AND log a referencing mark |
 | `w` | Pin a signal or `0x<id>:<byte>.<bit>` to the watch pane |
 | `u` | Unpin a watch |
+| `Ctrl-1`..`Ctrl-5` | Collapse / expand analysis pane (top→bottom; the side-by-side bit panes share slot 3) |
+| `Ctrl-↑` / `Ctrl-↓` | Bump anomaly z-threshold by ±0.5 (clamped ≥0.5). Live re-filters the bit-flip panes |
+| `Alt-↑` / `Alt-↓` | Bump byte-activity ratio by ±0.5 (clamped ≥0.5). Live re-filters the active-bytes pane |
+| `Ctrl-D` | Toggle D7 visibility in the active-bytes pane |
+| `Ctrl-Y` | Toggle "show suppressed" in the mark-driven flipped pane |
+| `Ctrl-N` | Open the hypothesis-capture modal (see scenario above) |
+
+Modifier-key bindings are session-local — they never persist back to disk. If a setting always wants a non-default starting value, pass the CLI flag.
 
 **Procedure mode only:**
 
@@ -163,19 +201,23 @@ Any other printable key gets recorded raw — label it later from your notes.
 
 ## Reading the live view
 
-Five panes top-to-bottom:
+Five collapsible content panes top-to-bottom, then the always-visible status row:
 
-1. **Watch** — your pinned signals (`w` to add). Each row: name · current value · 12-cell sparkline · pin origin. Booleans render as a square wave; numbers auto-scale to the buffer's own min/max so a stationary signal looks flat, not noisy.
+1. **Watch** *(`Ctrl-1` to fold)* — your pinned signals (`w` to add). Each row: name · current value · 12-cell sparkline · pin origin. Booleans render as a square wave; numbers auto-scale to the buffer's own min/max so a stationary signal looks flat, not noisy.
 
-2. **Decoded signals** — every entry from `signals.yaml`, with its current value and `(stale)` if no frame for that signal in the last 2 s.
+2. **Decoded signals** *(`Ctrl-2` to fold)* — every entry from `signals.yaml`, with its current value and `(stale)` if no frame for that signal in the last 2 s.
 
-3. **Known signals changed** *(left)* — schema-mapped signals whose value differs from baseline. Read first: "X went from A to B."
+3. **Known signals changed / Unknown bits flipped** *(side-by-side; `Ctrl-3` folds both together)*. Both depend on a mark — they're empty until you press a hotkey, and they baseline against the bus state at that moment.
+   - *Known signals changed* (left, cyan): schema-mapped signals whose value differs from baseline. Read first — "X went from A to B."
+   - *Unknown bits flipped* (right, yellow): bits *not* covered by any signal, scored against their own EWMA baseline. Top rows = most-anomalous-for-this-bit. Warmup rows show `z=∞`. D7 (checksum) is hidden by default — `Ctrl-D` (or `--show-d7`) includes it. `Ctrl-Y` (or `--show-suppressed`) reveals bits the EWMA threw out.
 
-4. **Unknown bits flipped** *(right)* — bits *not* covered by any signal, scored against their own EWMA baseline. Top rows = most-anomalous-for-this-bit. Warmup rows show `z=∞`. D7 (checksum) is hidden by default — pass `--show-d7` to include it.
+4. **Live anomalies** *(`Ctrl-4` to fold)* — same scoring as the unknown-bits pane but *continuous* (no mark required). Surfaces bits that are reacting to *something* even when you haven't pressed a hotkey. Newest-first, ages out after `--discovery-retention-secs` (default 60). The threshold `Ctrl-↑↓` tunes is shown in the header.
 
-5. **Live anomalies** — same scoring as #4 but *continuous* (no mark required). Surfaces bits that are reacting to *something* even when you haven't pressed a hotkey. Newest-first, ages out after `--discovery-retention-secs` (default 60).
+5. **Active unknown bytes** *(`Ctrl-5` to fold)* — byte-level (not bit-level) discovery (ADR 0008). For each (arb, byte), maintains a rolling-window range and a long EWMA baseline; surfaces bytes whose current range is `--byte-activity-ratio` times the baseline. Bytes covered by `signals.yaml` are excluded (they belong to the decoded pane). Each row: ID · byte index · current value · sparkline · range · ratio · shape hint (`sensor` / `boolean` / `counter` / `step`). D7 hidden by default (`Ctrl-D`). This is the pane the `Ctrl-N` hypothesis modal pulls from.
 
-6. **Status** — elapsed · frames · unique IDs · marks · snapshots. `dropped N` in red = the UI thread is falling behind; capture itself is unaffected (the worker thread writes `capture.log` directly).
+6. **Status** *(always visible)* — three lines: elapsed · frames · unique IDs · marks · snapshots; then current tunables (`z=… ratio=…× d7=… suppressed=…`); then a key-cheat line. `dropped N` in red = the UI thread is falling behind; capture itself is unaffected (the worker thread writes `capture.log` directly).
+
+Collapsed state is session-local — re-collapse next launch. Defaults are all-expanded so the layout never shifts on startup.
 
 ---
 
@@ -184,12 +226,20 @@ Five panes top-to-bottom:
 Defaults are tuned for "first look at a new input." Drop the threshold to fish for subtler signals; raise it to cut chatter:
 
 ```
---anomaly-z-threshold 3.0         # default; lower = noisier panes
+# Bit-flip discovery (ADR 0007)
+--anomaly-z-threshold 3.0         # default; lower = noisier panes — also live via Ctrl-↑↓
 --anomaly-warmup-flips 5          # rows surface as z=∞ for this many flips
---discovery-retention-secs 60     # how long the bottom pane remembers
---show-suppressed                 # also show bits the EWMA threw out (debug)
---show-d7                         # include the D7 checksum byte
+--discovery-retention-secs 60     # how long the live-anomalies pane remembers
+--show-suppressed                 # also show bits the EWMA threw out (debug) — live via Ctrl-Y
+--show-d7                         # include D7 in bit + byte panes — live via Ctrl-D
+
+# Byte-activity discovery (ADR 0008)
+--byte-activity-window-secs 2.0       # rolling window for short_range
+--byte-activity-ratio 3.0             # threshold over EWMA baseline — also live via Alt-↑↓
+--byte-activity-hysteresis-secs 3.0   # how long a quiet byte lingers before leaving the pane
 ```
+
+The two threshold flags (`--anomaly-z-threshold`, `--byte-activity-ratio`) and the two toggles (`--show-d7`, `--show-suppressed`) are live-adjustable mid-session via the modifier keys — the CLI flag is still the right path if a non-default value should be the *starting* point. The structural flags (window, warmup, retention, hysteresis) are CLI-only.
 
 ---
 
@@ -204,6 +254,7 @@ logs/<date>-<label>/
 ├── session.md               header auto-populated; **you fill the body**
 ├── live_decode.csv          per-frame decoded values (only with --live)
 ├── snapshot-N.json          one per `.` press (only with --live)
+├── hypotheses.yaml          one stanza per `Ctrl-N` capture (only with --live; append-only)
 └── procedure.yaml.snapshot  copy of the procedure file (only with --experiment)
 ```
 
@@ -215,7 +266,7 @@ python scripts/analyze.py logs/<date>-<label>/
 
 — picks the right per-input scanner (`kill_switch_scan.py` etc.) based on what marks landed, writes `analyze_report.txt` into the session dir. See the catalog in `scripts/README.md` for what each scanner does.
 
-**`session.md` is the part future-you cares about most.** Fill in: bike state (cold/warm, gear, clutch, side stand, ROAD/SUPERMOTO), rider narrative (what you actually did, in order), anomalies (anything weird — backfires, error codes, the rider misclicking).
+**`session.md` is the part future-you cares about most.** Fill in: bike state (cold/warm, gear, clutch, side stand, ROAD/SUPERMOTO), rider narrative (what you actually did, in order), anomalies (anything weird — backfires, error codes, the rider misclicking). If `hypotheses.yaml` was written, cross-link it: a line or two per stanza saying what made you press `Ctrl-N` and what you'd want the next experiment to confirm.
 
 ---
 
@@ -223,7 +274,7 @@ python scripts/analyze.py logs/<date>-<label>/
 
 **No frames at all.** Check `ls /dev/cu.usbmodem*` matches your `--port`. Sniff the raw line with `pio device monitor` — if you see status lines but no `t…` / `T…` lines, the firmware can see the adapter but not the bus (wiring, bitrate mismatch, key not on).
 
-**`dropped N` in red and climbing.** UI thread can't keep up. Capture itself is fine (worker thread is independent), but the live view is lossy from that point. Lower the load: drop `--anomaly-z-threshold` higher (fewer rows), unpin watches you don't need, close the operator screen if you don't need it. The dropped counter is recorded — `capture.log` is still complete.
+**`dropped N` in red and climbing.** UI thread can't keep up. Capture itself is fine (worker thread is independent), but the live view is lossy from that point. Lower the load: bump the thresholds (`Ctrl-↑` for z, `Alt-↑` for ratio — fewer rows in the discovery panes), fold panes you aren't watching (`Ctrl-1`..`Ctrl-5`), unpin watches you don't need. The dropped counter is recorded — `capture.log` is still complete.
 
 **Decoded pane shows `—` for a signal that should be live.** The signal isn't being broadcast in this bus state (some IDs only run with engine on), OR `signals.yaml` has the wrong coordinates. Cross-check against `inventory_ids.py` output.
 

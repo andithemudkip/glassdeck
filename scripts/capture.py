@@ -56,6 +56,8 @@ HOTKEYS: dict[str, tuple[str, str]] = {
     "s": ("start", "starter button"),
     "h": ("horn", "horn"),
     "e": ("idle_settled", "idle settled"),
+    "j": ("sidestand", "side stand"),
+    "c": ("clutch", "clutch pump"),
 }
 
 LEGEND = """
@@ -63,10 +65,17 @@ LEGEND = """
   b      high beam            g  gear shift      n  neutral
   m      ROAD/SUPERMOTO       r  trip reset      t  throttle blip
   k      kill switch          s  starter         h  horn
-  e      idle settled         ?  this legend     q  stop capture
+  e      idle settled         j  side stand      c  clutch pump
+  ?      this legend          q  stop capture
   w      pin a signal to the Watch pane (live-only)
   u      unpin a Watch entry                     .  snapshot
   (any other key: recorded raw, label it later in session.md)
+
+  -- ADR 0010 (live-view only) --
+  Ctrl-1..5  collapse / expand pane (top→bottom)
+  Ctrl-↑↓    z-threshold ±0.5   Alt-↑↓  activity ratio ±0.5
+  Ctrl-D     toggle D7          Ctrl-Y  toggle suppressed
+  Ctrl-N     capture hypothesis from active byte / continuous bit
 """
 
 
