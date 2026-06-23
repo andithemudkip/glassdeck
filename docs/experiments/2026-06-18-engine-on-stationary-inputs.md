@@ -7,6 +7,8 @@ related:
     - can/always-on-broadcast-ids
     - can/post-kill-decay-groups
     - can/signal-rpm
+    - can/signal-throttle-position
+    - can/signal-warmup-index
   references:
     - ktm-can-decoder
     - svartpilen-401-dash-user-manual
@@ -14,6 +16,7 @@ related:
     - 2026-06-17-engine-idle-baseline-x3
     - 2026-06-17-payload-diff-idle
     - 2026-06-18-throttle-sweep-engine-off
+    - 2026-06-23-engine-driven-rear-spin
   logs: []
 ---
 
@@ -29,7 +32,13 @@ Five overlapping sub-hypotheses, all to be tested in one session because each in
 2. **Trip reset:** per the manual, hold SET for 3 s while on the Trip 1 (or Trip 2) screen. Likely targets a momentary bit somewhere in the body-controller cluster (`12E`, `450`, `541` are candidates because they're slow-decay and currently UNKNOWN/LOW-CARD). May or may not be distinguishable from a generic SET-long-press event — the mode toggle in (1) is also a SET long-press, just in a different display context.
 3. **Dash button short presses:** the cluster has only two buttons, **MODE** and **SET**. MODE short-press cycles displays (ABS → Info if warnings → ODO → Trip 1 → Trip 2 → wrap). SET short-press cycles sub-menus within the current display. Short presses are candidate momentary bits in the slow-decay group; MODE-vs-SET may be a single button-event line with an enum, or two separate bits.
 4. **Throttle blip engine-on:** confirms the throttle-position decoding from [2026-06-18-throttle-sweep-engine-off](2026-06-18-throttle-sweep-engine-off.md) holds with engine running.
-5. **RPM-driven secondary signals:** with the engine running and the throttle blipped, RPM moves from idle ~1700 up to maybe ~4000–5000 briefly. Any byte that tracks RPM (a load index, a derived gear-ratio in neutral, an engine-load %) becomes visible. The payload-diff classified most `121` bytes as LOW-CARD without a hypothesis — engine-on blipping is the natural way to start separating them.
+5. **RPM-driven secondary signals + throttle-vs-RPM discrimination for `540` D1.** With the engine running, two complementary motion patterns are useful:
+   - **Throttle blips** (Phase D, fast transients) make RPM-tracking bytes visible against the steady idle background. The payload-diff classified most `121` bytes as LOW-CARD without a hypothesis — engine-on blipping is the natural way to start separating them.
+   - **Held RPM setpoints in neutral** (Phase E, matched to [[2026-06-23-engine-driven-rear-spin]] in 1st gear) decouple throttle from RPM. Analysis of the in-gear capture ([`scripts/engine_load_scan.py`](../../scripts/engine_load_scan.py) + [`scripts/idle_load_compare.py`](../../scripts/idle_load_compare.py)) already established two things about `540` D1: (a) off-idle it fits `D1 ≈ 14 + 0.8 × throttle%` cleanly across the 5 setpoints, and (b) in-gear-clutch-out at idle (genuine drivetrain drag) reads identical to neutral-idle at matched RPM/throttle — **MAP / engine-load is ruled out** because a real load signal would respond to drivetrain drag at fixed throttle. The leading interpretation is now **throttle-derived with a coolant-keyed idle offset**, recasting the prior [[signal-warmup-index]] reading. Phase E discriminates this from the remaining alternative (RPM-derived) cleanly:
+     - **D1(neutral) < D1(in-gear) at matched RPM** ⇒ throttle-derived. In neutral the same RPM is reached at much lower throttle, so a throttle-keyed byte reads lower. This is the leading-hypothesis prediction.
+     - **D1(neutral) ≈ D1(in-gear) at matched RPM** ⇒ RPM-derived. Throttle doesn't matter; only RPM drives the value.
+     - **D1 tracks throttle within Phase E too** ⇒ direct re-derivation of [[signal-throttle-position]]; check the linear fit and the residual structure against the in-gear fit for any RPM-banded extra term.
+   - The same per-setpoint table from `engine_load_scan.py` applied to Phase E will surface other unknown bytes whose RPM/throttle correlation differs between the two captures — `121` D0..D3 in particular, where the in-gear capture showed non-monotonic RPM-banded shapes that Phase E will reproduce (RPM-keyed) or wash out (load- or throttle-keyed in a way the in-gear data already accounted for).
 
 The session structure matters: each input is bracketed by a held window with no other rider activity, so per-window statistics cleanly attribute movement to one input. Press the right event-mark key on every transition.
 
@@ -92,8 +101,24 @@ Three blips, increasing in aggression — single small **`t`** at the start of e
 15. Medium blip (~50 % grip, ~0.5 s). `t`. RPM to ~5000. Wait 4 s.
 16. Bigger blip (~75 % grip, ~0.5 s). `t`. RPM to ~7000. Wait 4 s. **Do not** go to redline on a static engine — no load means RPM climbs explosively and risks valve float / over-rev.
 
-17. Kill switch (**`k`**). Let everything decay. Key off when silent. Wait 2 s. `q`.
-18. `session.md` — log the starting ABS mode (ROAD or SUPERMOTO, read from the 4 s startup display), confirm Trip 1 was the one reset (not Trip 2), any unexpected dash behaviour at mode toggle (flashing = fault, abort), any rev-limiter intervention on the throttle blips.
+### Phase E — held RPM setpoints in neutral (matches [[2026-06-23-engine-driven-rear-spin]])
+
+Five setpoints at the same nominal RPM targets as the in-gear rear-spin sweep (2000, 2500, 3500, 4500, 5500), held ~12 s each in neutral, with idle rests between. Analysis reads RPM from CAN frame-by-frame, so ±200 RPM of target is fine — what matters is **steady throttle hold** for the full 12 s, not the exact number.
+
+Key delta from Phase D: no load on the engine (neutral, no gear engaged), so at matched RPM the throttle position needed in Phase E will be **lower** than in the in-gear capture, and any genuinely load-driven byte will read lower too. The 12 s hold gives the same window length the in-gear analysis script already expects (`WINDOW_SKIP_S=3`, `WINDOW_LEN_S=8`).
+
+Engine has now been at idle/blip for several minutes — coolant should be at full operating temperature, which keeps the comparison against the in-gear capture clean (both at warm floor for any coolant-keyed quantities).
+
+17. ~2000 RPM hold, 12 s. `setpoint` auto-mark at start. Settle to idle 6 s between.
+18. ~2500 RPM hold, 12 s. Settle 6 s.
+19. ~3500 RPM hold, 12 s. Settle 6 s.
+20. ~4500 RPM hold, 12 s. Settle 6 s.
+21. ~5500 RPM hold, 12 s. Settle 6 s. **Do not exceed ~6500 RPM in neutral** — same valve-float caveat as Phase D.
+
+### Shutdown
+
+22. Kill switch (**`k`**). Let everything decay. Key off when silent. Wait 2 s. `q`.
+23. `session.md` — log the starting ABS mode (ROAD or SUPERMOTO, read from the 4 s startup display), confirm Trip 1 was the one reset (not Trip 2), any unexpected dash behaviour at mode toggle (flashing = fault, abort), any rev-limiter intervention on the throttle blips, and any RPM hold the rider had trouble keeping steady in Phase E.
 
 ## Analysis plan
 
@@ -108,20 +133,30 @@ Three blips, increasing in aggression — single small **`t`** at the start of e
 3. **Phase C — dash button presses.**
    - Frame-by-frame diff in a 100 ms window around each `space` mark in Phase C. Expect a momentary bit indicating "button pressed" — likely one bit/enum for MODE and another for SET (or a single button-id field).
    - Cross-check against the SET-long-press events in Phases A and B: a SET short-press in Phase C should share whatever line a SET long-press uses, distinguished only by duration. If the long-press and short-press lines differ, the cluster pre-classifies the press type before broadcasting.
-4. **Phase D — throttle blip engine-on.**
+4. **Phase D — throttle blip engine-on (transient response).**
    - `120` D2: confirm same encoding as engine-off (linear, same scale).
    - `12A` D0 bit 1 (throttle-open flag): same threshold as engine-off?
    - `12A` D1 bit 6: should be **invariant** to throttle/RPM (per the manual, the mode bit is ABS-only and not engine-conditioned). If it moves with throttle or RPM, that contradicts the manual and is itself a finding worth flagging.
-   - RPM-tracking bytes: any byte that climbs with `120` D0,D1 — engine load %, MAP-derived signal, etc. Plot suspects against decoded RPM.
-   - **`540` D1 — physical-quantity discriminator for [[signal-warmup-index]].** At warm idle this byte sits at ~0x0E (14). The three blips give three throttle/RPM excursions on top of a steady thermal background, which separates the three open candidates:
-     - **Rises with throttle** (e.g., 14 → 18-22 during the blip, returns to 14 after) → power enrichment on top of the warm-idle baseline → byte is a **fuelling enrichment %** (cold-start + power-enrichment composite). Consistent with the cold→warm 25→14 walk being warm-up enrichment dialling down.
-     - **Drops with throttle** (e.g., 14 → 11-12 during the blip) → an AFR-shaped quantity that goes richer under load. Fits the warm-idle ~14 ≈ stoich coincidence but doesn't explain the cold-start direction (cold engines run richer = lower AFR, but our cold value is *higher*) — flag as conflict, needs a separate cold-start engine-on capture to resolve.
-     - **Flat through all three blips** → byte is purely coolant-temp-keyed, independent of fuelling/load → points at **fast-idle target / idle-air-bypass position** rather than an enrichment quantity.
-     - **Moves with RPM but not with throttle position** (the blips have correlated RPM and throttle — distinguishable by looking at the recovery: throttle returns to 0 fast, RPM bleeds down slower over 1-2 s) → RPM-conditioned, not throttle-conditioned. Less likely given the data, but worth checking.
-   - Plot `540` D1 alongside `120` D2 (throttle) and decoded RPM across all three blips on one timeline; the three blips give three independent reads of the same discriminator.
-5. **Cross-phase invariants.** Coolant temp (`540` D5,D6) should drift very slightly upward across the ~3 min session. Gear should remain neutral. Side stand should remain down. Any of these moving without the corresponding input is a calibration issue with the experiment.
-6. **MIL bit (free finding from existing transitions).** Per the manual the malfunction indicator lamp is ON whenever the engine is not running and OFF whenever it is. The existing timeline already gives two MIL transitions: key-on → idle (ON → OFF at the `e` mark) and kill → silence (OFF → ON at the `k` mark). Diff a key-on-engine-off window against the steady-idle window: any bit that's HIGH in both engine-off windows and LOW in the idle window is a MIL candidate. We need this signal for the dashboard regardless — passive analysis only.
-7. **Mode-vs-engine independence (manual cross-check).** Per the owner's manual the mode toggle is rear-ABS-only. So between Phase A and Phase D: idle RPM, idle throttle position, and any candidate engine-load / fuelling bytes (e.g. `540` D1) should be **identical across the two modes**. If they differ, the manual is incomplete and the toggle also nudges an engine-side parameter — record as a contradicting finding.
+   - **`540` D1 transient response** — the throttle blips give three fast throttle→RPM excursions. Because throttle plate position leads RPM (throttle snaps open, RPM rises over ~100–300 ms), the leading-edge behaviour separates throttle-following from RPM-following:
+     - D1 spikes with the throttle leading edge (within one or two 100 ms frames) ⇒ **throttle / MAP-keyed**.
+     - D1 lags the throttle and tracks decoded RPM ⇒ **RPM-keyed**.
+     - D1 stays flat through all three blips ⇒ **coolant-keyed only** (Phase E setpoints will then also read flat — single confirmation).
+   - RPM-tracking bytes generally: any byte that climbs with `120` D0,D1 — engine load %, ignition advance, fuel pulse-width. Plot suspects against decoded RPM. The held setpoints in Phase E are the cleaner steady-state read for these; Phase D mostly informs which candidates are worth ranking in Phase E.
+
+5. **Phase E — held RPM setpoints (matched-RPM comparison vs [[2026-06-23-engine-driven-rear-spin]]).**
+   - Run [`scripts/engine_load_scan.py`](../../scripts/engine_load_scan.py) on this capture with `--session logs/<this session>` and compare the per-setpoint table directly against the in-gear table from the rear-spin capture.
+   - **`540` D1 (the [[signal-warmup-index]] re-attribution).** Pre-existing evidence from the rear-spin capture already ruled MAP/engine-load out and fit `D1 ≈ 14 + 0.8 × throttle%` off-idle (see [[signal-warmup-index]] preamble). Phase E discriminates throttle-derived from RPM-derived. At matched RPM:
+     - D1(neutral) < D1(in-gear), and a linear D1-vs-throttle fit in Phase E recovers the same slope as the in-gear fit → **throttle-derived** (the leading-hypothesis outcome). Rewrite the finding under a throttle-fuel-index name; the coolant offset stays as the idle-only behaviour.
+     - D1(neutral) ≈ D1(in-gear) within noise → **RPM-derived**, and the in-gear throttle correlation was just RPM and throttle being co-linear in that capture. Rewrite the finding around RPM-keyed semantics.
+     - D1(neutral) > D1(in-gear) at matched RPM → unexpected; would suggest some inverse-load behaviour or a sensor we don't know about — flag as a new puzzle.
+   - **Other unknown bytes from `engine_load_scan.py` Q2b** (`121` D0..D3 in particular, which showed non-monotonic shapes in the in-gear sweep). For each:
+     - Same matched-RPM table. A byte that tracks RPM identically in both captures is RPM-derived (likely ignition advance base, RPM-banded fuel map index, etc.).
+     - A byte that differs between captures at matched RPM is load- or throttle-derived (MAP, injection pulse-width, computed load %).
+     - Non-monotonic shapes that **reproduce** between the two captures at matched RPM are load- or RPM-banded look-ups, not noise.
+   - **Engine-on baseline byte values at idle.** The 30 s idle-settled window at the start of this capture, plus the 6 s rest windows between Phase E setpoints, give a clean idle reference. Any byte that's static at idle and non-static at the setpoints is a strong engine-load candidate even without the in-gear comparison.
+6. **Cross-phase invariants.** Coolant temp (`540` D5,D6) should drift very slightly upward across the ~5 min session (Phase E adds load-free revs which warm the engine a little). Gear should remain neutral. Side stand should remain down. Any of these moving without the corresponding input is a calibration issue with the experiment.
+7. **MIL bit (free finding from existing transitions).** Per the manual the malfunction indicator lamp is ON whenever the engine is not running and OFF whenever it is. The existing timeline already gives two MIL transitions: key-on → idle (ON → OFF at the `e` mark) and kill → silence (OFF → ON at the `k` mark). Diff a key-on-engine-off window against the steady-idle window: any bit that's HIGH in both engine-off windows and LOW in the idle window is a MIL candidate. We need this signal for the dashboard regardless — passive analysis only.
+8. **Mode-vs-engine independence (manual cross-check).** Per the owner's manual the mode toggle is rear-ABS-only. So between Phase A and Phases D/E: idle RPM, idle throttle position, and any candidate engine-load / fuelling bytes (e.g. `540` D1) should be **identical across the two modes**. If they differ, the manual is incomplete and the toggle also nudges an engine-side parameter — record as a contradicting finding.
 
 ## Expected outcomes
 
@@ -132,6 +167,8 @@ Three blips, increasing in aggression — single small **`t`** at the start of e
 - **Trip reset is a *different* bit from the short-press cluster** → consistent with a "long press detected" sentinel separate from the raw button line.
 - **Throttle decoder holds engine-on** → promote engine-off throttle finding from `provisional` (if that's how it was filed) to `confirmed` engine-on.
 - **An RPM-tracking byte appears** → new candidate finding; may need a dedicated dyno-style sweep to fully characterise.
+- **`540` D1 reads lower in Phase E than in [[2026-06-23-engine-driven-rear-spin]] at matched RPM** → [[signal-warmup-index]] is actually an **engine-load / MAP signal**; rewrite the finding under a new name, leave the cold→warm walk as a secondary idle-floor effect. This is the headline outcome of the load-decoupling design.
+- **`121` D0..D3 reproduce the non-monotonic RPM-banded shape in Phase E** → those bytes encode an RPM-keyed look-up (ignition advance map, fuel map index, or similar) independent of load; deserves a follow-up session targeting the band boundaries.
 
 ## Follow-ups
 

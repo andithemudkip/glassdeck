@@ -5,9 +5,22 @@ established_by:
   - 2026-06-17-engine-idle-baseline-x3
   - 2026-06-21-cross-session-payload-diff
   - 2026-06-21-bit-transition-scan
+contradicted_by:
+  - 2026-06-23-engine-driven-rear-spin
 references:
   - ktm-can-decoder
 ---
+
+> **2026-06-23 — interpretation under review.** Two pieces of new evidence from [[2026-06-23-engine-driven-rear-spin]] (analysed with [`scripts/engine_load_scan.py`](../../../scripts/engine_load_scan.py) and [`scripts/idle_load_compare.py`](../../../scripts/idle_load_compare.py)):
+>
+> 1. **Off-idle, D1 tracks throttle.** Across the 5 RPM setpoints D1 climbs from 17.5 (2000 RPM / 2 % throttle) to 35.1 (5000 RPM / 24 % throttle) at **constant operating-temp coolant**. A simple `D1 ≈ 14 + 0.8 × throttle%` model fits to within ~+1.7 LSB across all 5 points (small constant residual, suggests a minor RPM term on top). The dominant off-idle input is throttle, not coolant.
+> 2. **Engine load alone does not move D1.** Phase A of the same capture spent ~21 s in 1st gear with the clutch fully out and the rear wheel spinning on the paddock stand — genuine drivetrain drag, ECU holding idle RPM against it. At matched RPM (1704 vs 1709) and matched throttle (0 % vs 0 %), D1 in-gear = 15.57 vs neutral 15.67, Δ = -0.10 (inside σ = 0.61). **MAP / engine-load is ruled out as the primary interpretation** — true MAP would respond to load even at fixed throttle.
+>
+> **Revised reading:** D1 is most likely a **throttle-position-derived quantity** (or a fuelling-table index keyed off throttle) with a **coolant-keyed offset at idle**. The cold→warm walk (0x19 → 0x0E) the original finding documented is real and reflects coolant-keyed idle corrections; the warm-up framing is wrong because off-idle the byte stops tracking coolant and starts tracking throttle. If D1 is just a re-derivation of `120` D2 (the throttle byte we already have) plus a coolant offset, it's of limited interest for the dashboard but worth documenting cleanly.
+>
+> **Open discriminator:** Phase E of [[2026-06-18-engine-on-stationary-inputs]] (matched-RPM neutral setpoints) decides throttle-derived vs RPM-derived. In neutral the same RPM is reached with much less throttle, so D1(neutral) at e.g. 4500 RPM should read **lower** than D1(in-gear) at 4500 RPM if throttle-derived; **equal** if RPM-derived.
+>
+> **Rewrite deferred** until Phase E. The text below is preserved as-is — it remains a correct description of D1 *at idle*, only the projection to "warm-up index" overall is wrong. If Phase E confirms the throttle-derived reading, this file gets renamed (probably `signal-throttle-fuel-index` or similar) and rewritten.
 
 # Warm-up index — `540` D1
 

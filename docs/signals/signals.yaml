@@ -156,7 +156,7 @@
   notes: "1/16 km/h per LSB (best-fit slope 0.05633 across the engine-driven sweep; ~10% gap to 0.0625 attributed to back-of-envelope KTM 390 gearing × tyre circumference, pending OEM-speedo cross-check). D2 is a coarse mirror of the same speed at ~1/10 km/h that wraps at 25.5 km/h — not registered here (use D5:D6 as the source of truth). D3 stays 0x00 (not a high byte for D2)."
 
 - name: engine_on_counter
-  status: provisional
+  status: confirmed
   finding: signal-engine-on-counter
   arbitration_id: 0x541
   byte: 4
@@ -165,5 +165,5 @@
   encoding: uint
   scale: 1
   offset: 0
-  unit: ticks
-  notes: "~1 Hz binary counter, 7-bit modulo 128. Bit 7 of D4 never toggled; treat as reserved. Increments only with engine running."
+  unit: s
+  notes: "Engine-running seconds counter, 7-bit modulo 128 (wraps every 128 s). Rate confirmed constant ~1 Hz from idle to ~5500 RPM via the engine-driven rear-spin capture — not an engine-cycle / fuel-injection counter. Bit 7 reserved (never toggled). Frozen engine-off."

@@ -165,6 +165,8 @@ Same 6-toggle signature. `121` D5 already has bit 3 known to flip 0→1 engine-o
 
 The toggle count halves cleanly bit-by-bit from bit 0 to bit 6 — the classic signature of a **binary counter** where bit N flips at half the rate of bit N-1. Engine-on only (zero toggles in every engine-off session). The 7-bit chain caps at bit 6, suggesting a `0..127` value. Across ~175 s of idle, bit 0 toggled 175 times → bit 0 flips ~1 Hz → the counter is ticking at roughly 1 Hz when the engine runs. Plausible candidates: **engine-running seconds counter**, fuel-injection event counter (binned), or a derived value like estimated fuel consumption. Payload_diff originally tagged `541` D4 as CRC-LIKE (high entropy); the bit-level chain explains why — it looks high-entropy because the low bits flip continuously, but the structure is a counter, not a checksum.
 
+**Resolved (2026-06-24): seconds counter, not an event counter.** Re-analysing the 2026-06-23 engine-driven rear-spin capture with `scripts/id541_d4_tick_rate.py`, the tick rate stays clustered around 1 Hz from idle (~1700 RPM) up through the 5500 RPM setpoint — `ticks/rev` falls inversely with RPM rather than holding constant, ruling out the fuel-injection / engine-event interpretation. Promoted to `confirmed` in [[signal-engine-on-counter]]; the fuel-consumption candidacy is closed.
+
 **4. `540` D1 bits 0-4 — bit-level signature consistent with derived-coolant**
 
 ```
@@ -201,7 +203,7 @@ The methodology limitation is real but bounded: bits that flip *only* at engine-
 
 What this **does not** establish:
 
-- Whether `541` D4 is a seconds counter, a fuel-injection event counter, or something else. Confirming the rate requires knowing the host module's update period for the byte (currently inferred as ~1 Hz from the ~175 s idle window producing 175 bit-0 toggles).
+- ~~Whether `541` D4 is a seconds counter, a fuel-injection event counter, or something else.~~ Resolved 2026-06-24 — seconds counter, see the inline update above and [[signal-engine-on-counter]].
 - Whether `121` D5 bit 2 and `5B0` D0 bit 4 are sourced from the same kill input pin in different modules, or whether they reflect different downstream computations (e.g., "kill switch raw" vs "kill switch + key-on AND"). All three known kill-correlated bits flip on the same edges in this capture; only a more complex scenario (key cycled mid-kill, hardware fault, etc.) could discriminate.
 - Whether the gear-session bit ripple on `121` D0-D3 is "kill-like" because the rider also toggled the kill switch during gear cycle (no — session.md doesn't note it) or because the bus has an "engine state changed" composite event. Engine-on capture with more deliberate sequencing would clarify.
 

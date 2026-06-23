@@ -1,17 +1,43 @@
 ---
 area: can
-status: provisional
+status: confirmed
 established_by:
   - 2026-06-21-bit-transition-scan
+  - 2026-06-23-engine-driven-rear-spin
 ---
 
-# Candidate engine-on counter — `541` D4
+# Engine-running seconds counter — `541` D4 bits 0..6
 
-`541` byte D4 is a strong candidate for a **slow engine-on counter** (or counter-like derived value). Originally tagged CRC-LIKE in [[2026-06-17-payload-diff-idle]] because it has ≥128 distinct values across an idle window; bit-level analysis ([[2026-06-21-bit-transition-scan]]) reveals the per-bit toggle counts form a clean binary-counter cascade rather than the uniform high-entropy distribution a checksum would produce.
+`541` byte D4, low 7 bits, is a **7-bit modulo-128 engine-running seconds counter**. It ticks at ~1 Hz whenever the engine is running and is frozen engine-off. Bit 7 has never toggled in any observed session and is treated as reserved.
 
-## Observation
+```
+seconds_mod_128 = data[4] & 0x7F     # 0..127, wraps every 128 s
+```
 
-Per-bit toggle counts in each ~175-second engine-on idle window:
+Update rate (of the broadcast): 100 ms (the period of `541` — see [[always-on-broadcast-ids]]). The counter's *value* only increments once a second; the byte is rebroadcast at the ID's period in between.
+
+## Engine-time, not engine-events
+
+The decisive test was whether the tick rate is constant under wall-clock time (seconds counter) or scales with RPM (an engine-cycle / fuel-injection event counter). The 2026-06-23 engine-driven rear-spin capture holds steady RPM setpoints from idle to ~5500; the rate is essentially flat:
+
+| RPM bin     | duration (s) | ticks | rate (Hz) | ticks/rev |
+|-------------|-------------:|------:|----------:|----------:|
+| idle (~1700) | 205.6        | 202   | 0.98      | 0.0349    |
+| ~2000       | 11.1         | 12    | 1.09      | 0.0318    |
+| ~2500       | 5.9          | 6     | 1.02      | 0.0244    |
+| ~3000       | 6.0          | 6     | 1.00      | 0.0202    |
+| ~3500       | 8.5          | 8     | 0.94      | 0.0157    |
+| ~5500       | 6.4          | 6     | 0.94      | 0.0112    |
+
+If the byte were an engine-cycle counter, `ticks/rev` would be roughly constant and the rate would climb ~3× from idle to 5500. The opposite happens — rate stays clustered around 1 Hz and `ticks/rev` falls inversely with RPM. The 4000 / 4500 RPM bins are noisier (each only held 4–7 s, 5–7 ticks; one bad sample shifts the rate visibly) but neither breaks the pattern.
+
+The three steady-idle baselines independently land at 0.983 / 0.989 / 0.991 Hz over ~180 s each — close to 1.00 Hz but slightly under, consistent with a true ~1 Hz tick and small bin-edge truncation in the analysis rather than a non-unit rate.
+
+Re-derive with `python scripts/id541_d4_tick_rate.py`.
+
+## Per-bit toggle cascade (engine-on idle)
+
+The clean halving cascade that originally flagged this byte as a counter — bits 0..6 each toggle at half the rate of the bit below — over ~175 s of steady idle:
 
 | bit | idle-1 | idle-2 | idle-3 | ratio vs bit 0 |
 |----:|-------:|-------:|-------:|---------------:|
@@ -24,40 +50,28 @@ Per-bit toggle counts in each ~175-second engine-on idle window:
 | 6   | 2      | 2      | 2      | 0.016           |
 | 7   | 0      | 0      | 0      | —               |
 
-Each higher bit toggles at exactly half the rate of the bit below it — the textbook signature of a binary counter (bit 0 is the LSB and flips most often; bit 6 is the high bit and flips least). Bit 7 never toggles in the observed window; the counter looks 7-bit, value range `0..127`.
+Bit 0 is the LSB. Engine-off toggle counts are zero in every off session (cold-boot, throttle, kill, stand, clutch, gear).
 
-Engine-off toggle counts are zero in every session (cold-boot, throttle, kill, stand, clutch, gear). The counter only ticks with the engine running.
+## Why this isn't fuel consumption
 
-## Rate inference
-
-Bit 0 toggled ~175 times over ~175 s of steady idle → bit 0 flip ~1 Hz → **counter increments approximately once per second**. At ~1 Hz, a 7-bit counter wraps every 128 s — consistent with the byte being a rolling seconds-of-engine-run modulo 128, or any other ~1 Hz tick (fuel-injection event group counter divided down, idle-air-control update tick, etc.).
-
-## Why not a CRC
-
-A standard checksum byte exhibits uniform high entropy: each bit toggles at roughly the same rate, near 50 %. `541` D4's bit rates differ by a factor of 88× from bit 0 to bit 6. That's not what a CRC produces. The byte-level CRC-LIKE tag in [[2026-06-17-payload-diff-idle]] was based on distinct-value count alone (≥128 distinct) without checking the structural pattern — bit-level analysis exposes the structure.
-
-## Hypotheses
-
-- **Engine-run seconds counter, 7-bit modulo 128.** Cleanest fit to the ~1 Hz rate.
-- **Derived counter — fuel-injection events / N, ignition pulses / N.** Same observable pattern at any rate that averages to ~1 Hz over 175 s.
-- **A coarse value other than a counter** (e.g., engine-load index, fuel-trim integrator) that happens to walk monotonically at ~1 Hz at idle. Less likely given the clean per-bit halving.
-
-## Promote-to-confirmed criteria
-
-- A longer engine-on capture (say 300+ s) shows bit 0 still toggling at ~1 Hz and bit 6 at ~1/64 Hz.
-- An RPM excursion (engine blip from idle to 4000 RPM) either changes the rate (→ event-based counter) or doesn't (→ seconds counter). Either outcome is decisive.
-
-If the rate is constant under RPM change, it's a seconds counter and can be read directly. If the rate scales with RPM, it's an event counter and can still be useful (e.g., trip-meter derivation).
+The byte was on the candidate list for fuel-consumption derivation. It isn't — the rate is decoupled from RPM, so it can't be an injection-event count and it can't be an integrated-fuel-mass quantity. Useful only as engine-hours (modulo 128 s, so usable for short windows or once dewrapped across captures), not for L/h. See the analysis in `scripts/id541_d4_tick_rate.py` and the broader fuel-rate hunt notes in [[byte-121-twin-int16]] and the planned fuel-level walkdown.
 
 ## What this is NOT
 
-- Not a flag-bit map: a flag would show toggle counts of 1–10 per session matching specific events, not a clean halving cascade.
-- Not coolant-related: independent of `540` D5/D6.
-- Not a checksum despite the original CRC-LIKE tag.
+- Not a CRC despite the original byte-level CRC-LIKE tag — that was based on distinct-value count alone (≥128). A real CRC's per-bit toggle rates would cluster near 50 % at every bit, not halve cleanly.
+- Not a fuel / engine-event counter (ruled out by the RPM-excursion test above).
+- Not a flag-bit map.
+
+## Open
+
+- **Wrap dewrapping.** Across a session longer than 128 s the byte rolls. Consumers need to integrate `(curr - prev) mod 128` per frame (the `id541_d4_tick_rate.py` analyzer does this). Worth wrapping in a small helper if more callers materialise.
+- **Sub-second jitter.** Median rate at idle reads 0.98–0.99 Hz, not exactly 1.00. Within the precision of the analysis (bin-edge truncation, ~1 LSB per ~180 s window) this is consistent with a true 1 Hz tick; an independent stopwatch-anchored capture could pin it tighter if it ever matters.
 
 ## Evidence
 
-- [`docs/experiments/2026-06-21-bit-transition-scan.md`](../../experiments/2026-06-21-bit-transition-scan.md) — per-bit toggle table for `541` D4.
-- [`docs/experiments/2026-06-17-payload-diff-idle.md`](../../experiments/2026-06-17-payload-diff-idle.md) — original byte-level CRC-LIKE tag (now superseded by the bit-level structural read).
+- [`docs/experiments/2026-06-21-bit-transition-scan.md`](../../experiments/2026-06-21-bit-transition-scan.md) — per-bit toggle table establishing the counter structure.
+- [`docs/experiments/2026-06-23-engine-driven-rear-spin.md`](../../experiments/2026-06-23-engine-driven-rear-spin.md) — RPM setpoint capture that supplied the rate-vs-RPM test.
+- [`scripts/id541_d4_tick_rate.py`](../../../scripts/id541_d4_tick_rate.py) — re-derives the table above.
+- [`docs/experiments/2026-06-17-payload-diff-idle.md`](../../experiments/2026-06-17-payload-diff-idle.md) — original byte-level CRC-LIKE tag (superseded).
 
-See also: [[byte-d7-cycle-hash]] (different ID, separate algorithm), [[always-on-broadcast-ids]].
+See also: [[byte-d7-cycle-hash]] (different ID, separate algorithm), [[always-on-broadcast-ids]], [[byte-121-twin-int16]].
