@@ -14,6 +14,7 @@ from .constants import (
     ANOMALY_HALO_SECS,
     ANOMALY_HOT_SECS,
     ANOMALY_WARM_SECS,
+    BYTE_SPARKLINE_WIDTH,
     SPARKLINE_BUFFER,
     SPARKLINE_WIDTH,
 )
@@ -68,12 +69,19 @@ class ByteActivityStats:
     baseline_range_ewma: float = 0.0
     last_active_ts: float | None = None
     display_buffer: deque[float] = field(
-        default_factory=lambda: deque(maxlen=SPARKLINE_BUFFER)
+        default_factory=lambda: deque(maxlen=BYTE_SPARKLINE_WIDTH)
     )
     frozen_buffer: list[float] = field(default_factory=list)
     last_display_sample_ts: float = 0.0
     peak_ratio: float = 0.0
     peak_ratio_ts: float | None = None
+    # Burst-end snapshot trigger (ADR 0012 refinement): freeze the
+    # display buffer once the value has been stable for
+    # BYTE_BURST_FREEZE_DELAY_SECS, instead of waiting for the 2 s
+    # detection-buffer slide to end active_now. Lets the burst sit on
+    # the right edge of the sparkline rather than drifting middle-left.
+    prev_val: int | None = None
+    last_value_change_ts: float = 0.0
 
 
 @dataclass(slots=True)
@@ -227,6 +235,25 @@ def _anomaly_sparkline(buckets: Sequence[int]) -> str:
     return "".join(out).ljust(width)
 
 
+def glyph_matches_expectation(glyph: str, expect_shape: str | None) -> bool:
+    """ADR 0013 — map expect_shape → anomaly-pane glyph.
+
+    `sensor`/`step` both register as multi-bit bursts (`⊞`) at the
+    bit-flip level — the byte pane disambiguates them. `counter` is
+    the single-bit-on-fast-baseline glyph (`↻`). `boolean` is the
+    isolated-flip glyph (`·`). Anything else returns False, including
+    `expect_shape is None` (no expectation, no match)."""
+    if expect_shape is None:
+        return False
+    if expect_shape in ("sensor", "step"):
+        return glyph == "⊞"
+    if expect_shape == "counter":
+        return glyph == "↻"
+    if expect_shape == "boolean":
+        return glyph == "·"
+    return False
+
+
 def _anomaly_glyph(g: GroupedRow) -> str:
     """ADR 0011 §glyph rules — a one-char hint at the anomaly's shape.
 
@@ -251,6 +278,7 @@ def _render_anomaly_row(
     *,
     accent: str | None,
     halo: bool,
+    expect_shape: str | None = None,
 ) -> str:
     """ADR 0011 — column-aligned row for the live anomalies pane.
 
@@ -263,11 +291,19 @@ def _render_anomaly_row(
     ANOMALY_WARM_SECS."""
     age = max(0.0, now - g.latest_ts)
     arb_token = f"0x{g.arb:03X}"
+    glyph = _anomaly_glyph(g)
+    expect_match = glyph_matches_expectation(glyph, expect_shape)
     if halo:
         arb_render = f"[bold yellow]{arb_token}[/bold yellow]"
         lead = "▶ "
     elif accent is not None:
         arb_render = f"[{accent}]{arb_token}[/{accent}]"
+        lead = "  "
+    elif expect_match:
+        # ADR 0013 — expect-shape accent loses to halo and co-occurrence
+        # accent (both convey live event semantics); only colours when
+        # neither is fighting for the same arb token.
+        arb_render = f"[green]{arb_token}[/green]"
         lead = "  "
     else:
         arb_render = arb_token
@@ -277,7 +313,6 @@ def _render_anomaly_row(
     if len(bits_field) > 18:
         bits_field = bits_field[:18]
     spark = _anomaly_sparkline(g.bucket_timeline)
-    glyph = _anomaly_glyph(g)
 
     if math.isinf(g.max_z) and g.max_z > 0:
         score = "z=∞"
@@ -318,6 +353,8 @@ def _render_byte_row(
     now: float,
     dim: bool,
     shape_suffix: str,
+    expect_accent: bool = False,
+    expect_mismatch: bool = False,
 ) -> str:
     """ADR 0012 — column-aligned row for the Active unknown bytes pane.
 
@@ -331,12 +368,19 @@ def _render_byte_row(
     Sparkline source: `frozen_buffer` if non-empty (we're in tail
     rendering the shape we snapshotted at active→tail transition),
     otherwise the live `display_buffer`. The caller is responsible
-    for snapshotting `frozen_buffer` at the right moment."""
+    for snapshotting `frozen_buffer` at the right moment.
+
+    ADR 0013 — `expect_accent=True` wraps the arb/byte token in green
+    so matching rows pop during the cooldown tail. `expect_mismatch=
+    True` wraps the whole row in `[dim]` regardless of HOT tier so
+    matches stand out above non-matches; the two are mutually
+    exclusive at the call site. The unclassified/first-activity case
+    leaves both False — neutral tier per ADR 0013 §4."""
     if stats.frozen_buffer:
         spark_values = stats.frozen_buffer
     else:
         spark_values = list(stats.display_buffer)
-    spark = sparkline(spark_values)
+    spark = sparkline(spark_values, width=BYTE_SPARKLINE_WIDTH, baseline_as_space=True)
 
     if math.isinf(stats.peak_ratio):
         peak_str = "∞"
@@ -350,11 +394,17 @@ def _render_byte_row(
     else:
         age_field = "    —"
 
+    if expect_accent:
+        arb_render = f"[green]0x{arb:03X} D{byte}[/green]"
+    else:
+        arb_render = f"0x{arb:03X} D{byte}"
     line = (
-        f"  0x{arb:03X} D{byte}   value={cur:>3} / 0x{cur:02X}   "
+        f"  {arb_render}   value={cur:>3} / 0x{cur:02X}   "
         f"{spark}  │  {peak_field}  {age_field}{shape_suffix}"
     )
-    if dim:
+    # ADR 0013 — expect-mismatch wrap is independent of the existing
+    # HOT/DIM-tier `dim`; either condition is enough to dim the row.
+    if dim or expect_mismatch:
         line = f"[dim]{line}[/dim]"
     return line
 
@@ -385,23 +435,40 @@ def classify_byte(values: Sequence[int]) -> str:
     return "sensor"
 
 
-def sparkline(samples: Sequence[float], width: int = SPARKLINE_WIDTH, *, boolean: bool = False) -> str:
+def sparkline(
+    samples: Sequence[float],
+    width: int = SPARKLINE_WIDTH,
+    *,
+    boolean: bool = False,
+    baseline_as_space: bool = False,
+) -> str:
     """Render up to `width` samples as a unicode bar string.
 
     For numeric series, scales to the buffer's own min/max — a stationary
     series renders as a flat mid-block row, not as full-scale noise. For
     boolean series, segments are `_` (0) / `▔` (1) so the eye reads it as
-    a square wave rather than a smooth ramp."""
+    a square wave rather than a smooth ramp.
+
+    Right-justified so the most-recent sample sits on the right edge of
+    the cell — a partially-filled buffer (byte that only broadcasts
+    during activity) reads as "the burst just happened" rather than
+    "old data fading on the left".
+
+    `baseline_as_space=True` renders samples at the buffer's minimum as
+    ` ` instead of `▁`. Used by the byte-activity pane where the
+    baseline is almost always 0 and would otherwise crowd the burst
+    with a row of faint underlines."""
     if not samples:
         return " " * width
     tail = list(samples)[-width:]
     if boolean:
         s = "".join("▔" if bool(x) else "_" for x in tail)
-        return s.ljust(width)
+        return s.rjust(width)
     lo = min(tail)
     hi = max(tail)
     if hi - lo < 1e-9:
-        return ("▄" * len(tail)).ljust(width)
+        flat = " " if baseline_as_space else "▄"
+        return (flat * len(tail)).rjust(width)
     ramp = "▁▂▃▄▅▆▇█"
     out_chars = []
     span = hi - lo
@@ -409,5 +476,8 @@ def sparkline(samples: Sequence[float], width: int = SPARKLINE_WIDTH, *, boolean
         idx = int((x - lo) / span * 8)
         if idx > 7:
             idx = 7
-        out_chars.append(ramp[idx])
-    return "".join(out_chars).ljust(width)
+        if idx == 0 and baseline_as_space:
+            out_chars.append(" ")
+        else:
+            out_chars.append(ramp[idx])
+    return "".join(out_chars).rjust(width)

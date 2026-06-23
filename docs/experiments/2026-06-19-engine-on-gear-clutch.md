@@ -6,7 +6,7 @@ related:
   findings:
     - can/always-on-broadcast-ids
     - can/signal-gear-position
-    - can/byte-d7-checksum-hypothesis
+    - can/byte-d7-cycle-hash
   references:
     - ktm-can-decoder
   experiments:

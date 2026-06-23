@@ -27,6 +27,7 @@ from .constants import (
     BASELINE_FLOOR,
     BYTE_ACTIVITY_RETENTION_SECS,
     BYTE_ACTIVITY_SAMPLE_SECS,
+    BYTE_BURST_FREEZE_DELAY_SECS,
     DECODED_REFRESH_HZ,
     DISCOVERY_PANE_ROWS,
     EWMA_ALPHA,
@@ -38,6 +39,8 @@ from .constants import (
     STALE_AFTER_SECS,
 )
 from .modals import (
+    EXPECT_CANCEL,
+    ExpectShapeModal,
     HypothesisBitRow,
     HypothesisByteRow,
     HypothesisModal,
@@ -86,6 +89,10 @@ class LiveView(App):
         Binding("shift+left", "bump_ratio(-0.5)", show=False, priority=True),
         Binding("ctrl+d", "toggle_d7", show=False, priority=True),
         Binding("ctrl+y", "toggle_suppressed", show=False, priority=True),
+        # ADR 0013 — expect-shape lens. Like Ctrl+N (ADR 0010 §3), bound on
+        # `event.key` so the underlying 'e' still falls through to its
+        # printable-mark slot when chorded outside Ctrl.
+        Binding("ctrl+e", "expect_shape", show=False, priority=True),
     ]
 
     SCREENS = {"analysis": AnalysisScreen, "operator": OperatorScreen}
@@ -171,6 +178,12 @@ class LiveView(App):
         self.byte_activity_retention_secs = byte_activity_retention_secs
         self.byte_activity: dict[tuple[int, int], ByteActivityStats] = {}
 
+        # ADR 0013 — expect-shape lens. None means "no expectation set"
+        # (the surface renders as before). Values: "sensor" / "counter" /
+        # "step" / "boolean". Set only via the Ctrl+E picker, never via
+        # CLI — session-local by design.
+        self.expect_shape: str | None = None
+
         self.snapshot_seq = 0
         self.total_frames = 0
         self.unique_ids: set[int] = set()
@@ -242,6 +255,26 @@ class LiveView(App):
                 self.push_screen(
                     HypothesisModal(rows_bytes, rows_bits),
                     self._on_hypothesis_submit,
+                )
+            return
+        # ADR 0013 — same handling pattern as Ctrl+N: stop the event so 'e'
+        # doesn't fall through to the printable-mark slot, only push the
+        # modal when no other overlay is on top.
+        if event.key == "ctrl+e":
+            event.stop()
+            if not isinstance(
+                self.screen,
+                (
+                    WatchModal,
+                    UnpinModal,
+                    LegendScreen,
+                    HypothesisModal,
+                    ExpectShapeModal,
+                ),
+            ):
+                self.push_screen(
+                    ExpectShapeModal(self.expect_shape),
+                    self._on_expect_shape,
                 )
             return
         if not ch:
@@ -497,7 +530,7 @@ class LiveView(App):
             cur = self.current_bytes.get((arb, byte), 0)
             first_activity = stats.baseline_range_ewma <= BASELINE_FLOOR
             ratio = math.inf if first_activity else short_range / stats.baseline_range_ewma
-            shape = "" if first_activity else classify_byte([v for _, v in buf])
+            shape = classify_byte([v for _, v in buf])
             rows.append(
                 (
                     ratio,
@@ -543,6 +576,17 @@ class LiveView(App):
             )
             order.append(key)
         return [seen[k] for k in order[:DISCOVERY_PANE_ROWS]]
+
+    def _on_expect_shape(self, result) -> None:
+        """ADR 0013 — modal callback. Three branches:
+        - `EXPECT_CANCEL` sentinel: Esc — leave self.expect_shape alone.
+        - `None`: operator picked "clear" — set self.expect_shape to None.
+        - shape string ("sensor" / "counter" / "step" / "boolean"): arm
+          the lens. No render call needed — the 4 Hz tick picks it up
+          on the next pass (same pattern as the threshold tunables)."""
+        if result is EXPECT_CANCEL:
+            return
+        self.expect_shape = result
 
     def _on_hypothesis_submit(self, result: HypothesisResult | None) -> None:
         if result is None:
@@ -924,10 +968,23 @@ class LiveView(App):
         while buf and ts - buf[0][0] > window:
             buf.popleft()
 
-        # ADR 0012 — display buffer at ~4 Hz, independent of broadcast rate.
+        # ADR 0012 — display buffer at ~8 Hz, independent of broadcast rate.
         if ts - stats.last_display_sample_ts >= BYTE_ACTIVITY_SAMPLE_SECS:
             stats.display_buffer.append(float(val))
             stats.last_display_sample_ts = ts
+
+        # Track value-changes. The frozen sparkline snapshot is taken
+        # by the render loop once the value has been stable for
+        # BYTE_BURST_FREEZE_DELAY_SECS, so we record when the value
+        # most recently changed AND wipe any prior frozen snapshot so
+        # the next burst gets a fresh capture. Replaces the old
+        # "clear frozen on every active frame" rule, which never let a
+        # mid-burst plateau settle into a stable snapshot.
+        if stats.prev_val is None or stats.prev_val != val:
+            stats.last_value_change_ts = ts
+            if stats.frozen_buffer:
+                stats.frozen_buffer = []
+        stats.prev_val = val
 
         if len(buf) < 2:
             return
@@ -952,10 +1009,6 @@ class LiveView(App):
             if cur_ratio > stats.peak_ratio or stats.peak_ratio_ts is None:
                 stats.peak_ratio = cur_ratio
                 stats.peak_ratio_ts = ts
-            # Activity resumed — drop any frozen-tail snapshot so the
-            # sparkline goes live again.
-            if stats.frozen_buffer:
-                stats.frozen_buffer = []
 
     def _flip_rows(self) -> list[tuple[int, int, int, str, int, float, str, float]]:
         """Per-bit flip rows used by the unknown pane and snapshot JSON."""
@@ -1229,6 +1282,7 @@ class LiveView(App):
                     now,
                     accent=accent_by_arb.get(g.arb),
                     halo=row_halo,
+                    expect_shape=self.expect_shape,
                 )
             )
         if len(groups) > max_rows:
@@ -1335,12 +1389,18 @@ class LiveView(App):
                 # Never been active, currently quiet — nothing to show.
                 continue
 
-            # Freeze the display buffer at the active→tail transition so
-            # the sparkline preserves the byte's shape through decay.
+            # Freeze the display buffer once the byte's value has been
+            # stable for BYTE_BURST_FREEZE_DELAY_SECS. Earlier than the
+            # original active→tail trigger (which fires ~2 s late as the
+            # detection buffer slides out) so the burst lands on the
+            # right edge of the sparkline instead of drifting middle-
+            # left. _update_byte_activity wipes frozen_buffer on every
+            # value-change, so a fresh burst always gets re-snapshotted.
             if (
-                not active_now
-                and not stats.frozen_buffer
+                not stats.frozen_buffer
                 and stats.display_buffer
+                and stats.last_value_change_ts > 0.0
+                and now - stats.last_value_change_ts >= BYTE_BURST_FREEZE_DELAY_SECS
             ):
                 stats.frozen_buffer = list(stats.display_buffer)
 
@@ -1358,14 +1418,27 @@ class LiveView(App):
         body: list[str] = []
         for _peak, arb, byte, cur, dim, first in rows[:max_rows]:
             stats = self.byte_activity[(arb, byte)]
-            # Suffix logic preserved from ADR 0008 §6 — first-activity
-            # wins the trailing slot over the shape label.
+            # Shape leads, first-activity follows as a tag — both surface
+            # together so a sweep on a never-before-active byte still tells
+            # the operator what kind of signal it looks like.
+            shape_src = stats.frozen_buffer or list(stats.display_buffer)
+            shape = classify_byte([int(v) for v in shape_src])
+            parts: list[str] = []
+            if shape:
+                parts.append(shape)
             if first:
-                suffix = "  [dim](first activity)[/dim]"
-            else:
-                shape_src = stats.frozen_buffer or list(stats.display_buffer)
-                shape = classify_byte([int(v) for v in shape_src])
-                suffix = f"  [dim]{shape}[/dim]" if shape else ""
+                parts.append("(first activity)")
+            suffix = f"  [dim]{'  '.join(parts)}[/dim]" if parts else ""
+            # ADR 0013 — expect-shape lens. Neutral tier when shape is
+            # empty (classifier needs ≥4 samples) so the first second
+            # of a sweep isn't punished.
+            expect_accent = False
+            expect_mismatch = False
+            if self.expect_shape is not None and shape:
+                if shape == self.expect_shape:
+                    expect_accent = True
+                else:
+                    expect_mismatch = True
             body.append(
                 _render_byte_row(
                     stats,
@@ -1375,6 +1448,8 @@ class LiveView(App):
                     now=now,
                     dim=dim,
                     shape_suffix=suffix,
+                    expect_accent=expect_accent,
+                    expect_mismatch=expect_mismatch,
                 )
             )
         if len(rows) > max_rows:
@@ -1387,10 +1462,19 @@ class LiveView(App):
         hh, rem = divmod(elapsed, 3600)
         mm, ss = divmod(rem, 60)
         extra_str = f"   {extra}" if extra else ""
+        # ADR 0013 — expect-shape token. Only rendered when armed so the
+        # default tunables line stays compact for operators not using
+        # the lens.
+        expect_token = ""
+        if self.expect_shape is not None:
+            glyphs = {"sensor": "∿", "counter": "↻", "step": "⊟", "boolean": "▔_"}
+            g = glyphs.get(self.expect_shape, "")
+            expect_token = f"  [bold green]expect={self.expect_shape} {g}[/bold green]"
         tunables = (
             f"z={self.z_threshold:.1f}  ratio={self.byte_activity_ratio:.1f}×  "
             f"d7={'on' if self.show_d7 else 'off'}  "
             f"suppressed={'on' if self.show_suppressed else 'off'}"
+            f"{expect_token}"
         )
         return (
             f"[bold]Status[/bold]  "
@@ -1401,5 +1485,5 @@ class LiveView(App):
             f"snapshots {self.snapshot_seq}{extra_str}{dropped}\n"
             f"[dim]{tunables}[/dim]\n"
             f"[dim]hotkey mark · '.' snap · '?' legend · 'q' quit · "
-            f"F6/F7 z · Shift-←→ ratio · Ctrl-D D7 · Ctrl-Y supp · Ctrl-N hyp · F1..F5 fold[/dim]"
+            f"F6/F7 z · Shift-←→ ratio · Ctrl-D D7 · Ctrl-Y supp · Ctrl-N hyp · Ctrl-E expect · F1..F5 fold[/dim]"
         )

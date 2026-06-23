@@ -76,6 +76,7 @@ LEGEND = """
   F6 / F7    z-threshold +0.5 / -0.5    Shift-←→  activity ratio ±0.5
   Ctrl-D     toggle D7                  Ctrl-Y    toggle suppressed
   Ctrl-N     capture hypothesis from active byte / continuous bit
+  Ctrl-E     arm expect-shape lens (highlight matching rows; ADR 0013)
 """
 
 
@@ -315,7 +316,7 @@ def main() -> int:
         "--show-d7",
         action="store_true",
         help="Include D7 bytes in the live unknown-bits pane (off by default — "
-             "D7 churns deterministically per byte-d7-checksum-hypothesis and "
+             "D7 churns deterministically per byte-d7-cycle-hash and "
              "would swamp the pane). Snapshot JSON always records D7 flips.",
     )
     parser.add_argument(

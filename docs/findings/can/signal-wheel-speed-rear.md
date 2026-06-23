@@ -65,7 +65,7 @@ KTM test vector (from `ktm-can/tests/test_decoder.py::test_12B`): frame `12B 00 
 | D4   | unknown                | STATIC `0x00`                                  |
 | D5   | tilt high byte (8 bits)| STATIC `0x00`                                  |
 | D6   | tilt low / lean high   | **Varies with rear motion** (Husq-specific repurpose) |
-| D7   | lean low byte          | Universal D7 6-cycle byte ([[byte-d7-checksum-hypothesis]]) — not data |
+| D7   | lean low byte          | Universal D7 6-cycle byte ([[byte-d7-cycle-hash]]) — not data |
 
 So **D2 sits exactly where KTM puts the rear-wheel uint16 high byte**, and the byte that varies on Husqvarna matches that role. The strong implication for the still-unknown front-wheel byte is:
 
@@ -87,7 +87,7 @@ KTM uses D5..D7 for lean/tilt (12-bit signed integers sharing D6). The 2020 Svar
 
 - **D5**: STATIC `0x00` (unused / padding).
 - **D6**: A wheel-motion-derived quantity, varies with rear-wheel spin in this capture, ratio D6/D2 ~1.53× at peak and ~1.17× at decay tail.
-- **D7**: The universal cross-ID 6-cycle byte ([[byte-d7-checksum-hypothesis]]), unrelated to wheel speed.
+- **D7**: The universal cross-ID 6-cycle byte ([[byte-d7-cycle-hash]]), unrelated to wheel speed.
 
 So D6 is a genuine new signal not present in KTM's mapping — the lean/tilt slot has been replaced with a wheel-derived value. See the "Why two bytes for one wheel?" section above for hypotheses on what D6 actually encodes.
 

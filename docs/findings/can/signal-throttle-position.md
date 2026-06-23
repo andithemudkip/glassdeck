@@ -49,7 +49,7 @@ Across all 3 183 `120` frames in this capture, D0,D1 (RPM — see [[signal-rpm]]
 The throttle sweep also tested two adjacent hypotheses; both were rejected by this capture and should not propagate as assumptions:
 
 - **`12A` D0 bit 1 ≠ throttle-open flag.** Zero transitions of this bit across 53 s spanning the full throttle range. Whatever this bit encodes, it is not "throttle off the stop". Re-derive: `python scripts/throttle_sweep.py`, see the "0→1 flips" / "1→0 flips" lines.
-- **`120` D7 ≠ second throttle sensor (APP2).** D7 looked like a candidate from its range (32–223, 186 unique values), but a frame-by-frame Pearson correlation with D2 gives r = −0.012; D7's mean stays ~125–132 across every D2 bin. See [[byte-d7-checksum-hypothesis]] for the leading interpretation.
+- **`120` D7 ≠ second throttle sensor (APP2).** D7 looked like a candidate from its range (32–223, 186 unique values), but a frame-by-frame Pearson correlation with D2 gives r = −0.012; D7's mean stays ~125–132 across every D2 bin. See [[byte-d7-cycle-hash]] for the leading interpretation.
 
 ## Open
 
@@ -64,4 +64,4 @@ The throttle sweep also tested two adjacent hypotheses; both were rejected by th
 - [`logs/2026-06-19-throttle-sweep-engine-off/`](../../../logs/2026-06-19-throttle-sweep-engine-off/) — raw capture; `120_d2_timeseries.decoded.csv` written by the analysis script.
 - [`scripts/throttle_sweep.py`](../../../scripts/throttle_sweep.py) — re-derives every number above from the capture.
 
-See also: [[always-on-broadcast-ids]], [[signal-rpm]], [[byte-d7-checksum-hypothesis]], [[ktm-can-decoder]].
+See also: [[always-on-broadcast-ids]], [[signal-rpm]], [[byte-d7-cycle-hash]], [[ktm-can-decoder]].

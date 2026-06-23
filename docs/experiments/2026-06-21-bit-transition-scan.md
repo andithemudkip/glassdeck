@@ -7,7 +7,7 @@ related:
     - can/always-on-broadcast-ids
     - can/signal-kill-switch
     - can/signal-side-stand
-    - can/byte-d7-checksum-hypothesis
+    - can/byte-d7-cycle-hash
   experiments:
     - 2026-06-17-payload-diff-idle
     - 2026-06-21-cross-session-payload-diff
@@ -38,7 +38,7 @@ Concrete predictions:
 
 1. **Most bits across the 88×8 = 704 candidate bits are constant** in any single session — pure 0 or pure 1 across that session's window. The interesting tail is the bits that *toggle* but at a rate inconsistent with random / checksum / counter behaviour.
 2. **A small number of bits will exhibit "toggle in some sessions, stuck in others" behaviour.** Those are flag candidates — they're stuck when the corresponding input is not exercised and toggle when it is. This generalises [[signal-kill-switch]] / [[signal-side-stand]] and is the bit-level analogue of [[2026-06-21-cross-session-payload-diff]]'s SINGLE-CAUSE classification.
-3. **Bits inside D7 will toggle uniformly across all sessions** at high rate (per [[byte-d7-checksum-hypothesis]]: D7 cycles 6 deterministic values; 3 of its 8 bits constitute a Gray-code basis and thus toggle ~33–50 % of the time). They will dominate any unfiltered ranking. Excluding D7 sharpens the signal.
+3. **Bits inside D7 will toggle uniformly across all sessions** at high rate (per [[byte-d7-cycle-hash]]: D7 cycles 6 deterministic values; 3 of its 8 bits constitute a Gray-code basis and thus toggle ~33–50 % of the time). They will dominate any unfiltered ranking. Excluding D7 sharpens the signal.
 4. **Bits inside the RPM byte pair (`120` D0, D1)** will toggle at high rate engine-on (RPM jitter at idle drives the low bits) and be stuck at 0 engine-off. They will reproduce as ENGINE-STATE just like the byte-level analysis but with a clearer bit picture.
 5. **Some currently-LOW-CARD bytes will decompose** — e.g., `540` D3 LOW-CARD(4) should decompose into bit 0 (side stand) toggling under the side-stand session + at least one other bit toggling under the gear session, with the rest stuck. If the decomposition doesn't add up to the observed value set, there's a third moving bit we don't have a story for.
 
@@ -72,7 +72,7 @@ New script: `scripts/bit_transition_scan.py`. For every (ID, byte, bit) across t
    - **ENGINE-CONTRAST** — special case of SESSION-CONTRAST where the "high" set is exactly the 3 engine-on sessions and the "low" set is the 6 engine-off sessions. Cross-checks the [[2026-06-17-payload-diff-idle]] engine-state bit map at bit granularity.
    - **NEAR-CONSTANT** — toggle_rate ≤ 0.005 in every session but not exactly 0. Likely a rare flip or boot-transient leakage; flag for inspection but low priority.
 
-3. **D7 separation.** Maintain a `--include-d7` flag (default off). Per [[byte-d7-checksum-hypothesis]] D7 bits are deterministic 6-cycle output and will swamp any unfiltered top-N list. With the flag off, D7 bits are computed but printed separately so they can be sanity-checked against the known cycle (every D7 bit should land in CHECKSUM-LIKE) without polluting the SESSION-CONTRAST hunt.
+3. **D7 separation.** Maintain a `--include-d7` flag (default off). Per [[byte-d7-cycle-hash]] D7 bits are deterministic 6-cycle output and will swamp any unfiltered top-N list. With the flag off, D7 bits are computed but printed separately so they can be sanity-checked against the known cycle (every D7 bit should land in CHECKSUM-LIKE) without polluting the SESSION-CONTRAST hunt.
 
 4. **SESSION-CONTRAST short list.** For each SESSION-CONTRAST bit:
    - ID, byte:bit
@@ -117,7 +117,7 @@ New script: `scripts/bit_transition_scan.py`. For every (ID, byte, bit) across t
 | ENGINE-CONTRAST-FAST   | 8     |
 | NEAR-CONSTANT          | 8     |
 
-D7 bits (88 separate): 72 CHECKSUM-LIKE, 16 GLOBAL-CONSTANT — exactly the byte-d7-checksum-hypothesis prediction (some D7s like `450`/`540` were noted as static `0x00`; those land in GLOBAL-CONSTANT).
+D7 bits (88 separate): 72 CHECKSUM-LIKE, 16 GLOBAL-CONSTANT — exactly the byte-d7-cycle-hash prediction (some D7s like `450`/`540` were noted as static `0x00`; those land in GLOBAL-CONSTANT).
 
 ### Known-signal reproduction (bit-level)
 
@@ -219,4 +219,4 @@ What this **does not** establish:
 - Any SESSION-CONTRAST bit that doesn't match a known signal becomes a candidate `provisional` finding (ID, byte:bit, hypothesised trigger), gated on a per-input re-test.
 - If the `540` D3 decomposition surfaces a non-bit-independent encoding, note it on [[signal-side-stand]] so the value-set caveat is recorded.
 - Any byte that bit-level analysis flags but [[2026-06-21-cross-session-payload-diff]] missed gets reported as a classifier-gap on the byte-level diff — useful when designing the next analysis pass.
-- If D7 bits *don't* uniformly land in CHECKSUM-LIKE, the [[byte-d7-checksum-hypothesis]] needs revisiting (some D7s might have a non-cycle structure).
+- If D7 bits *don't* uniformly land in CHECKSUM-LIKE, the [[byte-d7-cycle-hash]] needs revisiting (some D7s might have a non-cycle structure).

@@ -13,7 +13,7 @@ dominant-value purity, then classifies each bit as:
   MIXED            doesn't fit the cleaner classes
 
 D7 bits are filtered out of the SESSION-CONTRAST hunt by default (per
-byte-d7-checksum-hypothesis they cycle deterministically and would swamp
+byte-d7-cycle-hash they cycle deterministically and would swamp
 any ranking) but are computed and printed separately as a sanity check.
 
 See docs/experiments/2026-06-21-bit-transition-scan.md for the design.

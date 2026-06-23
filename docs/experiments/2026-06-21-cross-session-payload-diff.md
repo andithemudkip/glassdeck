@@ -11,7 +11,7 @@ related:
     - can/signal-kill-switch
     - can/signal-side-stand
     - can/signal-gear-position
-    - can/byte-d7-checksum-hypothesis
+    - can/byte-d7-cycle-hash
   experiments:
     - 2026-06-17-payload-diff-idle
     - 2026-06-18-throttle-sweep-engine-off
@@ -81,7 +81,7 @@ New script: `scripts/cross_session_diff.py`. Reads all 9 sessions, classifies ea
    - **SINGLE-CAUSE(<session>)** — moves (≥3 distinct values OR purity ≤80 %) in exactly one session; static in the other 8. Records the session that triggered the movement. These are the prime new-signal candidates.
    - **ENGINE-STATE** — moves in the 3 engine-on sessions but is static across all 6 engine-off sessions (existing payload_diff result reproduced through a different lens — useful sanity check).
    - **MULTI-CAUSE** — moves in 2+ sessions. Annotated with the set of triggering sessions and a hint about whether the movement is consistent across them (same value set → composite of inputs encoded into one byte) or different (likely D7 checksum reacting to upstream change).
-   - **D7-EXCLUDED** — byte position D7 of any ID. Per [[byte-d7-checksum-hypothesis]], D7 churns deterministically with the rest of the payload; it will trivially appear MULTI-CAUSE everywhere. Tag separately so it doesn't drown out genuine multi-cause hits.
+   - **D7-EXCLUDED** — byte position D7 of any ID. Per [[byte-d7-cycle-hash]], D7 churns deterministically with the rest of the payload; it will trivially appear MULTI-CAUSE everywhere. Tag separately so it doesn't drown out genuine multi-cause hits.
 
 3. **Bit-level overlay.** Repeat (2) at bit granularity for any byte that is not GLOBAL-STATIC. A bit-level SINGLE-CAUSE hit is the strongest possible signal lead — exactly the [[signal-kill-switch]] / [[signal-side-stand]] pattern.
 
@@ -180,9 +180,9 @@ Loosening the ENGINE-STATE criterion to allow a small engine-off dominant set wo
 
 The 7-byte reduction (65 → 58 GLOBAL-STATIC across non-D7 slots) comes from `540` D1, `540` D2, `121` D2, `121` D5, `541` D4, plus the two `540` coolant bytes that the per-input sessions newly exercise (`540` D5/D6). No previously-STATIC byte newly moved under throttle/clutch/stand/gear/kill alone that wasn't already on the engine-on radar — the per-input sessions did not surface entirely new attributions, only refined the engine-state bit map.
 
-### D7 distribution (separate table per [[byte-d7-checksum-hypothesis]])
+### D7 distribution (separate table per [[byte-d7-cycle-hash]])
 
-D7 per-session distinct counts confirm the cycle-with-offset model: most IDs land at 6 distinct values per session (the universal 6-cycle), with `120` and `541` showing the expected wide distribution from per-payload XOR fold (`f(D0..D6)`). `450` and `540` D7 are static `0x00`/`0x00` across all 9 sessions — consistent with their finding-flagged "skip / no algorithm fit" status. Nothing here contradicts [[byte-d7-checksum-hypothesis]].
+D7 per-session distinct counts confirm the cycle-with-offset model: most IDs land at 6 distinct values per session (the universal 6-cycle), with `120` and `541` showing the expected wide distribution from per-payload XOR fold (`f(D0..D6)`). `450` and `540` D7 are static `0x00`/`0x00` across all 9 sessions — consistent with their finding-flagged "skip / no algorithm fit" status. Nothing here contradicts [[byte-d7-cycle-hash]].
 
 ## Interpretation
 

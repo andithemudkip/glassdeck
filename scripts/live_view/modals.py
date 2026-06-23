@@ -1,5 +1,5 @@
 """Modal overlay screens: legend popup, watch-pin search, unpin picker,
-hypothesis-capture form."""
+hypothesis-capture form, expect-shape picker."""
 
 from __future__ import annotations
 
@@ -147,6 +147,11 @@ class WatchModal(_CenteredModal):
             if q and q not in s.name.lower():
                 continue
             lv.append(ListItem(Static(f"{s.name}  [dim]({s.status})[/dim]"), name=s.name))
+        # Highlight the first row so ↑/↓ navigation and the "Enter on
+        # highlighted item" path have a starting point. Without this the
+        # initial selection is None and Enter on the empty input is a no-op.
+        if len(lv.children) > 0:
+            lv.index = 0
 
     def on_input_changed(self, event: Input.Changed) -> None:
         self._refresh_list(event.value)
@@ -154,17 +159,37 @@ class WatchModal(_CenteredModal):
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self.dismiss(self._resolve(event.value.strip()))
 
-    def _resolve(self, text: str) -> WatchPin | None:
-        if not text:
-            lv = self.query_one("#watch-list", ListView)
-            if lv.index is not None and 0 <= lv.index < len(lv.children):
-                item = lv.children[lv.index]
-                name = getattr(item, "name", None)
-                if name:
-                    return self._pin_for_signal_name(name)
-            return None
+    def on_list_view_selected(self, event) -> None:
+        # Fires on click and on Enter when the ListView has focus.
+        name = getattr(event.item, "name", None)
+        if name:
+            self.dismiss(self._pin_for_signal_name(name))
 
-        # Raw triplet form 0x<hex>:<byte>.<bit>
+    def on_key(self, event) -> None:
+        # While the Input has focus, ↑/↓ would otherwise be ignored — route
+        # them to the ListView so arrow-navigation works without the operator
+        # having to Tab over to it. PageUp/PageDown follow the same rule.
+        if event.key in ("down", "up", "pagedown", "pageup"):
+            lv = self.query_one("#watch-list", ListView)
+            n = len(lv.children)
+            if n == 0:
+                return
+            cur = lv.index if lv.index is not None else 0
+            if event.key == "down":
+                lv.index = min(cur + 1, n - 1)
+            elif event.key == "up":
+                lv.index = max(cur - 1, 0)
+            elif event.key == "pagedown":
+                lv.index = min(cur + 5, n - 1)
+            elif event.key == "pageup":
+                lv.index = max(cur - 5, 0)
+            event.stop()
+            return
+        super().on_key(event)
+
+    def _resolve(self, text: str) -> WatchPin | None:
+        # Raw triplet form 0x<hex>:<byte>.<bit> — syntax not present in the
+        # signal list, so it always takes precedence over the highlighted row.
         if text.lower().startswith("0x") and ":" in text and "." in text:
             try:
                 head, rest = text.split(":", 1)
@@ -181,7 +206,20 @@ class WatchModal(_CenteredModal):
             except ValueError:
                 pass
 
-        # Signal name: exact → prefix → substring.
+        # Prefer the highlighted list row — what the operator sees selected
+        # wins over a substring match against the (possibly stale) input text.
+        lv = self.query_one("#watch-list", ListView)
+        if lv.index is not None and 0 <= lv.index < len(lv.children):
+            item = lv.children[lv.index]
+            name = getattr(item, "name", None)
+            if name:
+                return self._pin_for_signal_name(name)
+
+        if not text:
+            return None
+
+        # Fallback when the filter excluded everything: match against the
+        # full signal list directly. Exact → prefix → substring.
         lower = text.lower()
         sig = next((s for s in self._signals if s.name.lower() == lower), None)
         if sig is None:
@@ -487,3 +525,122 @@ class HypothesisModal(_CenteredModal):
                 pin_to_watch=self._pin,
                 notes_ctx=notes_ctx,
             )
+
+
+# Order matters — drives both the modal display and the digit hotkeys
+# (1..N). Glyph column is the shape's visual identity per ADR 0013.
+EXPECT_SHAPES: list[tuple[str, str]] = [
+    ("sensor", "∿"),
+    ("counter", "↻"),
+    ("step", "⊟"),
+    ("boolean", "▔_"),
+]
+
+
+class ExpectShapeModal(_CenteredModal):
+    """Pick a shape to highlight on the discovery surface (ADR 0013).
+
+    Digit hotkeys submit immediately: `1..4` pick a shape, `0` clears,
+    `Esc` cancels. ↑/↓ + Enter also works for operators who'd rather
+    not memorize the digit order. The modal returns a shape string
+    (`sensor` / `counter` / `step` / `boolean`), `None` to clear, or
+    leaves state untouched on cancel — `app.py` distinguishes 'cancel'
+    from 'clear' by checking whether the callback fired."""
+
+    CSS = f"""
+    ExpectShapeModal {{ align: center middle; }}
+    #expect-box  {{ width: 48; max-height: 12; {_MODAL_BOX_CSS} }}
+    #expect-list {{ height: auto; max-height: 6; }}
+    #expect-foot {{ height: 1; }}
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", show=False, priority=True),
+    ]
+
+    def __init__(self, current: str | None) -> None:
+        super().__init__()
+        self._current = current
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="expect-box"):
+            cur = f"  [dim](current: {self._current})[/dim]" if self._current else ""
+            yield Static(f"[bold]Expect shape[/bold]{cur}")
+            yield ListView(id="expect-list")
+            yield Static(
+                "[dim]1..4 pick · 0 clear · ↑↓ + Enter · Esc cancel[/dim]",
+                id="expect-foot",
+            )
+
+    def on_mount(self) -> None:
+        lv = self.query_one("#expect-list", ListView)
+        for i, (name, glyph) in enumerate(EXPECT_SHAPES):
+            mark = "[bold green]●[/bold green]" if name == self._current else " "
+            lv.append(
+                ListItem(
+                    Static(f"  {i + 1}  {mark}  {name:<8} ({glyph})"),
+                    name=name,
+                )
+            )
+        lv.append(ListItem(Static("  0     none / clear"), name="__clear__"))
+        # Highlight current selection so Enter on first show is meaningful.
+        if self._current is not None:
+            for i, (name, _) in enumerate(EXPECT_SHAPES):
+                if name == self._current:
+                    lv.index = i
+                    break
+        else:
+            lv.index = 0
+        lv.focus()
+
+    def on_list_view_selected(self, event) -> None:
+        # Fires on click (and on Enter while ListView has focus, but we
+        # already handle Enter explicitly in on_key — that's fine, this
+        # branch just becomes redundant in that case).
+        name = getattr(event.item, "name", None)
+        if name == "__clear__":
+            self.dismiss(None)
+        elif name:
+            self.dismiss(name)
+
+    # Digit hotkeys — handled in on_key so they fire even without the
+    # ListView having focus (matches the "press once to dismiss" feel of
+    # the LegendScreen rather than the form-driven HypothesisModal).
+    def on_key(self, event) -> None:
+        ch = event.character
+        if ch in ("1", "2", "3", "4"):
+            idx = int(ch) - 1
+            if idx < len(EXPECT_SHAPES):
+                event.stop()
+                self.dismiss(EXPECT_SHAPES[idx][0])
+                return
+        if ch == "0":
+            event.stop()
+            self.dismiss(None)
+            return
+        if event.key == "enter":
+            event.stop()
+            lv = self.query_one("#expect-list", ListView)
+            if lv.index is None:
+                return
+            item = lv.children[lv.index]
+            name = getattr(item, "name", None)
+            if name == "__clear__":
+                self.dismiss(None)
+            elif name:
+                self.dismiss(name)
+            return
+        # Fall through to _CenteredModal's Esc handler.
+        super().on_key(event)
+
+    def action_cancel(self) -> None:
+        # `_CANCEL_SENTINEL` distinguishes "Esc cancel" from "selected
+        # clear" — app.py keys off it to leave self.expect_shape alone
+        # rather than nulling it.
+        self.dismiss(_CANCEL_SENTINEL)
+
+
+# Module-level sentinel for ExpectShapeModal.action_cancel — a plain
+# `None` collides with the "clear" return, so we use a distinct object.
+_CANCEL_SENTINEL: object = object()
+EXPECT_CANCEL: object = _CANCEL_SENTINEL

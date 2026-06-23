@@ -13,11 +13,11 @@ classifies:
   SINGLE-CAUSE   exactly one session "moves" (>=2 distinct values, purity
                  <99%); the other 8 are static at the same value
   MULTI-CAUSE    2+ sessions move (D7 bytes flagged separately per the
-                 byte-d7-checksum-hypothesis finding)
+                 byte-d7-cycle-hash finding)
   CROSS-DRIFT    no session moves internally, but dominant value differs
                  between sessions
   D7-EXCLUDED    byte index 7 — printed in its own table since D7 churns
-                 deterministically per byte-d7-checksum-hypothesis
+                 deterministically per byte-d7-cycle-hash
 
 See docs/experiments/2026-06-21-cross-session-payload-diff.md for the
 experiment design.
@@ -243,7 +243,7 @@ def main() -> int:
             })
         print()
 
-    print("# D7 byte distribution per ID (per byte-d7-checksum-hypothesis — expected MULTI-CAUSE)")
+    print("# D7 byte distribution per ID (per byte-d7-cycle-hash — expected MULTI-CAUSE)")
     print(f"  {'ID':>4}  per-session distinct counts")
     for arb in ALWAYS_ON_IDS:
         per_session_d7 = {

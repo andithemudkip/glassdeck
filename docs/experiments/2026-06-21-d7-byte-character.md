@@ -4,7 +4,7 @@ status: success
 phase: 1
 related:
   findings:
-    - can/byte-d7-checksum-hypothesis
+    - can/byte-d7-cycle-hash
     - can/always-on-broadcast-ids
   references:
     - ktm-can-decoder
@@ -30,13 +30,13 @@ related:
 
 ## Hypothesis
 
-[[byte-d7-checksum-hypothesis]] observed that D7 on 9 of 11 always-on broadcast IDs behaves like a derived byte: its cardinality scales with the rest of the payload's cardinality, IDs with static D0..D6 cycle through exactly 6 D7 values, and IDs with active payloads explore 100+ values. The leading hypothesis is "D7 is a deterministic function of D0..D6 emitted by the ECU's broadcast scheduler" — but the specific algorithm has not been reproduced.
+[[byte-d7-cycle-hash]] observed that D7 on 9 of 11 always-on broadcast IDs behaves like a derived byte: its cardinality scales with the rest of the payload's cardinality, IDs with static D0..D6 cycle through exactly 6 D7 values, and IDs with active payloads explore 100+ values. The leading hypothesis is "D7 is a deterministic function of D0..D6 emitted by the ECU's broadcast scheduler" — but the specific algorithm has not been reproduced.
 
 Two related claims will be tested simultaneously:
 
 1. **A single algorithm fits all 9 IDs.** A CRC-8 variant, a J1939-style additive checksum, or an XOR fold is computed by the ECU over D0..D6 and placed at D7. The same algorithm (possibly with a per-ID seed or per-ID XOR constant) explains every frame on every capture. If this holds, the algorithm is reproducible from data alone.
 
-2. **`12D` D7's six values are *not* this algorithm — they're a mod-7 sequence counter.** [[byte-d7-checksum-hypothesis]] flagged `12D` as the outlier: bytes 0–6 are STATIC `0x00`, D7 is LOW-CARD(7) (one more value than the "6 unique values" pattern). A checksum over an all-zero payload returns one value, not seven. A mod-7 sequence counter increments once per broadcast, modulo 7, independently of payload. The two are trivially distinguishable by time-series.
+2. **`12D` D7's six values are *not* this algorithm — they're a mod-7 sequence counter.** [[byte-d7-cycle-hash]] flagged `12D` as the outlier: bytes 0–6 are STATIC `0x00`, D7 is LOW-CARD(7) (one more value than the "6 unique values" pattern). A checksum over an all-zero payload returns one value, not seven. A mod-7 sequence counter increments once per broadcast, modulo 7, independently of payload. The two are trivially distinguishable by time-series.
 
 These two questions sit naturally together: if (1) holds and `12D` doesn't fit, that strengthens (2); if (1) fails but `12D` *is* a clean counter, the "D7 is structural" hypothesis splits into two distinct phenomena rather than one.
 
@@ -62,7 +62,7 @@ Tooling note: the search space is small enough to brute-force on a laptop. ~50 C
 
 ### Part A — single-polynomial fit on the 9 checksum-candidate IDs
 
-The 9 IDs from `byte-d7-checksum-hypothesis`: `120`, `121`, `129`, `12A`, `12D`, `12E`, `541`, `5A0`, `5B0`. (`540` and `450` are excluded from the original hypothesis because their payloads were too static to surface a D7 pattern; they get a separate pass below.)
+The 9 IDs from `byte-d7-cycle-hash`: `120`, `121`, `129`, `12A`, `12D`, `12E`, `541`, `5A0`, `5B0`. (`540` and `450` are excluded from the original hypothesis because their payloads were too static to surface a D7 pattern; they get a separate pass below.)
 
 1. Build a frame corpus: for each of these 9 IDs, collect every observed (D0..D6, D7) tuple from all capture logs. Deduplicate exact tuples — what matters is coverage of distinct payloads, not frame count.
 2. Candidate polynomial list (start narrow):
@@ -90,12 +90,12 @@ The original hypothesis explicitly says "says nothing about `540` and `450`." Wi
 
 ## Expected outcomes
 
-- **One algorithm fits 9 IDs at >99 %.** [[byte-d7-checksum-hypothesis]] promotes to `confirmed` *with the algorithm specified* (polynomial + seed + reflection params). Phase 5 active-TX is materially unblocked: any frame the dashboard synthesises can be checksummed correctly before transmit. `byte-d7-checksum-hypothesis` rewrites to specify the algorithm; the "Open" section largely closes.
+- **One algorithm fits 9 IDs at >99 %.** [[byte-d7-cycle-hash]] promotes to `confirmed` *with the algorithm specified* (polynomial + seed + reflection params). Phase 5 active-TX is materially unblocked: any frame the dashboard synthesises can be checksummed correctly before transmit. `byte-d7-cycle-hash` rewrites to specify the algorithm; the "Open" section largely closes.
 - **Per-ID seed, shared polynomial fits ≥7 IDs.** Same promotion, with a small per-ID config table.
 - **No fit on the narrow list, but a fit on the widened search.** Same promotion outcome; the experiment doc records the search depth needed (useful when future ECU variants are encountered).
-- **No fit at all.** [[byte-d7-checksum-hypothesis]] demotes to `provisional` and records what was tried. Reconsider whether D7 might be partly checksum / partly counter, partly module-state, or a manufacturer-proprietary obfuscated function. Active-TX work for Phase 5 picks up a known unknown.
-- **`12D` D7 is a mod-7 counter.** Carve-out in `byte-d7-checksum-hypothesis`: 9 IDs are checksums, `12D` is a sequence counter. Provisional new finding `signal-12d-heartbeat-counter.md` (or similar).
-- **`12D` D7 obeys the same algorithm.** The original hypothesis was over-stated; `12D` is not exceptional; the "7 unique values" was a checksum-output-space artefact. Update `byte-d7-checksum-hypothesis` to remove the carve-out.
+- **No fit at all.** [[byte-d7-cycle-hash]] demotes to `provisional` and records what was tried. Reconsider whether D7 might be partly checksum / partly counter, partly module-state, or a manufacturer-proprietary obfuscated function. Active-TX work for Phase 5 picks up a known unknown.
+- **`12D` D7 is a mod-7 counter.** Carve-out in `byte-d7-cycle-hash`: 9 IDs are checksums, `12D` is a sequence counter. Provisional new finding `signal-12d-heartbeat-counter.md` (or similar).
+- **`12D` D7 obeys the same algorithm.** The original hypothesis was over-stated; `12D` is not exceptional; the "7 unique values" was a checksum-output-space artefact. Update `byte-d7-cycle-hash` to remove the carve-out.
 
 ## Result
 
@@ -126,7 +126,7 @@ D7 is computed from D0..D6 *plus* a hidden state that itself cycles with period 
 
 ### Part C — `540` and `450`
 
-In the 5 s idle-run-1 window: `540` D7 was static `0x00` (single distinct payload `00 11 00 00 00 01 48`); `450` D7 was also static `0x00`. The original `byte-d7-checksum-hypothesis` explicitly excluded these two on payload-sparsity grounds; the wider corpus did not surface them either. Both IDs need a capture with more payload movement to test D7 structure.
+In the 5 s idle-run-1 window: `540` D7 was static `0x00` (single distinct payload `00 11 00 00 00 01 48`); `450` D7 was also static `0x00`. The original `byte-d7-cycle-hash` explicitly excluded these two on payload-sparsity grounds; the wider corpus did not surface them either. Both IDs need a capture with more payload movement to test D7 structure.
 
 ### Part D — 6-cycle is universal
 
@@ -208,7 +208,7 @@ This is the cleanest refutation of "`f` is a CRC-8 over D0..D6" we can produce. 
 
 ## Interpretation
 
-D7's algorithmic structure is much richer and more constrained than `byte-d7-checksum-hypothesis` originally claimed:
+D7's algorithmic structure is much richer and more constrained than `byte-d7-cycle-hash` originally claimed:
 
 1. **D7 is not a CRC over D0..D6 alone.** Refuted at every standard-variant level and at the per-ID seed level. The aggregate hit rate of 1.1 % is random-coincidence noise.
 
@@ -225,13 +225,13 @@ For Phase 5 active TX, the implications are mixed:
 - **Replay-style TX is feasible.** If the dashboard wants to send a frame with a payload it has already observed on the bus, it can pin D7 by listening to the cycle: any of the 6 observed values is valid at the matching counter position. Steady-state cycle lock-in takes ≤60 ms (six 10 ms frames).
 - **Novel-payload TX is blocked.** Without the algorithm, the dashboard cannot synthesise a valid D7 for a payload the ECU hasn't broadcast itself. Phase 5 active features (mode toggle, trip reset, etc.) probably need either reverse-engineering the algorithm in detail or relying on payloads we can observe the ECU emit.
 
-The "6 unique values on static-payload IDs" + "100+ on active-payload IDs" observation from the original `byte-d7-checksum-hypothesis` is fully explained: 6 = the cycle period; 100+ = (counter × payload_state) combinations, where the payload-derived component compresses into the same 8-bit output space via the same CRC-like function.
+The "6 unique values on static-payload IDs" + "100+ on active-payload IDs" observation from the original `byte-d7-cycle-hash` is fully explained: 6 = the cycle period; 100+ = (counter × payload_state) combinations, where the payload-derived component compresses into the same 8-bit output space via the same CRC-like function.
 
 ## Follow-ups
 
-- [x] Rewrite [`docs/findings/can/byte-d7-checksum-hypothesis.md`](../findings/can/byte-d7-checksum-hypothesis.md) — promote from "observation only" to a fully structural finding: 6-cycle period, universal base, per-ID XOR offsets cataloged, exact algorithm open.
+- [x] Rewrite [`docs/findings/can/byte-d7-cycle-hash.md`](../findings/can/byte-d7-cycle-hash.md) — promote from "observation only" to a fully structural finding: 6-cycle period, universal base, per-ID XOR offsets cataloged, exact algorithm open.
 - [x] **`120` cycle close-out** (Part H). All-zero payload in cold-boot engine-off window confirms offset `0x00`. Cataloged.
 - [ ] **Counter-phase alignment across IDs.** All 8 captured cycles start at different positions because the captures begin at arbitrary times. A simultaneous-capture analysis (any one capture, all IDs read in lockstep) of `(timestamp mod 60 ms, ID, D7_position)` would tell us whether the per-ID counters share a global phase (one master counter source) or run independently (each module has its own).
 - [ ] **Per-payload offset characterisation.** Now with TWO collisions (`120`/`12D` at `0x00` *and* `121`/`12A` at `0x08`), the question sharpens: compute `121`'s offset across each of its 9 distinct payloads. If the offset varies with payload, it's payload-derived. If it stays at `0x08`, it's per-ID. Cheap desk follow-up — but Parts I/J already refuted the simplest payload-only model, so a structural per-payload finding would require a non-CRC hash function.
 - [ ] **DataID search.** Try CRC-8/AUTOSAR with a 16-bit DataID prepended, searching DataID ∈ 0..65535 per ID, looking for one that reproduces the cycle. ~16 M configs per ID, tractable but a separate desk session.
-- [ ] **Active-TX implications for Phase 5.** A short note in [[byte-d7-checksum-hypothesis]] explaining that until the algorithm is reproduced, only replay-style TX of previously-observed payloads is viable. Mode toggle and trip reset will probably need either external information about the algorithm or a clever observation that the OEM dash's TX cycle is itself observable on the bus (which would let the dashboard replay those bytes verbatim).
+- [ ] **Active-TX implications for Phase 5.** A short note in [[byte-d7-cycle-hash]] explaining that until the algorithm is reproduced, only replay-style TX of previously-observed payloads is viable. Mode toggle and trip reset will probably need either external information about the algorithm or a clever observation that the OEM dash's TX cycle is itself observable on the bus (which would let the dashboard replay those bytes verbatim).

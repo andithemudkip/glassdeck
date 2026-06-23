@@ -7,7 +7,7 @@ related:
     - can/always-on-broadcast-ids
     - can/post-kill-decay-groups
     - can/signal-throttle-position
-    - can/byte-d7-checksum-hypothesis
+    - can/byte-d7-cycle-hash
   references:
     - ktm-can-decoder
   experiments:
@@ -104,7 +104,7 @@ Analysis re-derivable with `python scripts/throttle_sweep.py`.
 
 ### Side finding — D7 looks like a checksum
 
-The bus-wide range scan surfaced a striking pattern: D7 across 9 of the 11 always-on IDs has a value-set cardinality that scales with how much the rest of the payload moves. Mostly-static IDs (`129`, `12A`, `12D`, `12E`, `5A0`, `5B0`) all show exactly **6 unique D7 values**; active-payload IDs (`120`, `541`, `121`) show 12–186. Consistent with a checksum or hash over D0..D6, ruling out a free-running counter. Promoted as an observation with the CRC interpretation as the leading hypothesis: [[byte-d7-checksum-hypothesis]].
+The bus-wide range scan surfaced a striking pattern: D7 across 9 of the 11 always-on IDs has a value-set cardinality that scales with how much the rest of the payload moves. Mostly-static IDs (`129`, `12A`, `12D`, `12E`, `5A0`, `5B0`) all show exactly **6 unique D7 values**; active-payload IDs (`120`, `541`, `121`) show 12–186. Consistent with a checksum or hash over D0..D6, ruling out a free-running counter. Promoted as an observation with the CRC interpretation as the leading hypothesis: [[byte-d7-cycle-hash]].
 
 ### Weak lead — `541` D6
 

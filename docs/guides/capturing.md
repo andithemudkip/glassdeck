@@ -108,6 +108,12 @@ A `hypothesis` mark also lands in `events.csv` so you can locate the moment in t
 
 `--watch` mode disables capture (no session dir to write into); the modal pops a notification and bails.
 
+### "I'm hunting a specific kind of signal — accent the matches"
+
+You have a hypothesis ("RPM is some analog-ish sensor somewhere", "the kill-switch lives in a step-state byte"). Press `Ctrl-E`, pick a shape (`1`=sensor, `2`=counter, `3`=step, `4`=boolean; `0` clears). Matching rows in both discovery panes get a green-accented arb token; the byte pane also dims non-matches. See [Cue reference](#cue-reference) for the full behavior — and note that nothing is ever hidden, so an unexpected counter that turns out to be RPM still surfaces, just without preferential treatment.
+
+The lens is session-local — never persisted, no CLI flag. Press `Ctrl-E` again to change shape or clear.
+
 ### "I'm running a rider through a scripted procedure"
 
 Write the procedure as `docs/experiments/<slug>.procedure.yaml` (see ADR 0006 for schema, and the `--experiment` flag's help text). Then:
@@ -186,6 +192,7 @@ Any other printable key gets recorded raw — label it later from your notes.
 | `Ctrl-D` | Toggle D7 visibility in the active-bytes pane |
 | `Ctrl-Y` | Toggle "show suppressed" in the mark-driven flipped pane |
 | `Ctrl-N` | Open the hypothesis-capture modal (see scenario above) |
+| `Ctrl-E` | Open the expect-shape picker — accents matching rows in the discovery panes (ADR 0013) |
 
 Function-key bindings are session-local — they never persist back to disk. If a setting always wants a non-default starting value, pass the CLI flag.
 
@@ -201,101 +208,89 @@ Function-key bindings are session-local — they never persist back to disk. If 
 
 ## Reading the live view
 
-Five collapsible content panes top-to-bottom, then the always-visible status row:
+Six panes top-to-bottom, each fold-toggle-able with its function key. Status row always visible at the bottom.
 
-1. **Watch** *(`F1` to fold)* — your pinned signals (`w` to add). Each row: name · current value · 12-cell sparkline · pin origin. Booleans render as a square wave; numbers auto-scale to the buffer's own min/max so a stationary signal looks flat, not noisy.
+### 1. Watch (`F1`) — pinned signals
 
-2. **Decoded signals** *(`F2` to fold)* — every entry from `signals.yaml`, with its current value and `(stale)` if no frame for that signal in the last 2 s.
+Your `w`-pinned signals. Each row: name · current value · 12-cell sparkline · pin origin. Booleans render as a square wave; numbers auto-scale to the buffer's own min/max so a stationary signal looks flat, not noisy.
 
-3. **Known signals changed / Unknown bits flipped** *(side-by-side; `F3` folds both together)*. Both depend on a mark — they're empty until you press a hotkey, and they baseline against the bus state at that moment.
-   - *Known signals changed* (left, cyan): schema-mapped signals whose value differs from baseline. Read first — "X went from A to B."
-   - *Unknown bits flipped* (right, yellow): bits *not* covered by any signal, scored against their own EWMA baseline. Top rows = most-anomalous-for-this-bit. Warmup rows show `z=∞`. D7 (checksum) is hidden by default — `Ctrl-D` (or `--show-d7`) includes it. `Ctrl-Y` (or `--show-suppressed`) reveals bits the EWMA threw out.
+### 2. Decoded signals (`F2`)
 
-4. **Live anomalies** *(`F4` to fold; ADR 0011)* — same scoring as the unknown-bits pane but *continuous* (no mark required). Surfaces bits that are reacting to *something* even when you haven't pressed a hotkey. **Stable rows: one row per arbitration ID, sorted by arb ascending.** Rows don't jump when new events arrive — they brighten in place and dim when they age out. Ages out after `--discovery-retention-secs` (default 60). The threshold `F6/F7` tunes is shown in the header.
+Every entry from `signals.yaml`, with its current value and `(stale)` if no frame for that signal in the last 2 s.
 
-   Each row carries five visual cues — see the **Visual language** section below for the full reference.
+### 3. Known signals changed / Unknown bits flipped (`F3`, side-by-side)
 
-   ```
-     0x290  ⊞  D3 b2,b5            ▁▁▁▂▃▅█▇▅▃▁▁  │  z=4.2   -0.4s
-   ▶ 0x4A1  ·  D0 b0                ▁▁▁▁▁▁▁▁▁▁█▁  │  z=∞    -1.1s
-     0x123  ↻  D4 b7                ▁▂▁▂▁▂▁▂▁▂▁▂  │  z=3.5  -1.2s
-   ```
+Both depend on a mark — empty until you press a hotkey, then baselined against the bus state at that moment.
 
-5. **Active unknown bytes** *(`F5` to fold; ADR 0008, render redesigned in ADR 0012)* — byte-level (not bit-level) discovery. For each (arb, byte), maintains a rolling-window range and a long EWMA baseline; surfaces bytes whose current range is `--byte-activity-ratio` times the baseline. Bytes covered by `signals.yaml` are excluded (they belong to the decoded pane). Each row: ID · byte index · current value · sparkline · `peak=N.N×` · time-since-peak · shape hint (`sensor` / `boolean` / `counter` / `step` / `(first activity)`). D7 hidden by default (`Ctrl-D`). This is the pane the `Ctrl-N` hypothesis modal pulls from.
+- *Known signals changed* (left, cyan): schema-mapped signals whose value differs from baseline. Read first — "X went from A to B."
+- *Unknown bits flipped* (right, yellow): bits not covered by any signal, scored against their own EWMA baseline. Top rows = most-anomalous-for-this-bit. Warmup rows show `z=∞`. D7 (checksum) hidden by default — `Ctrl-D` (or `--show-d7`) includes it. `Ctrl-Y` (or `--show-suppressed`) reveals bits the EWMA threw out.
 
-   Rows persist for the full `--byte-activity-retention-secs` window (default 30 s) past their last active moment, with a brightness transition at `--byte-activity-hysteresis-secs` (default 5 s). The sparkline **freezes** when activity ends so the byte's peak shape is preserved through decay — see the **Visual language** section below.
+### 4. Live anomalies (`F4`; ADR 0011) — continuous bit-flip discovery
 
-   ```
-     0x290 D2   value=234 / 0xEA   ▁▂▃▄▅▆▇█      │  peak=4.2×   -0.3s   sensor
-     0x4A1 D0   value=  3 / 0x03   ▁▁▁▁▁▁▁█      │  peak=∞      -1.1s   (first activity)
-   [dim]  0x123 D4   value= 12 / 0x0C   ▁▂▁▂▁▂▁▂  │  peak=2.8×   -8.2s   counter[/dim]
-   ```
+Same scoring as Unknown bits flipped, but *continuous* (no mark required). Surfaces bits reacting to something even when you haven't pressed a hotkey. **One row per arbitration ID, sorted by arb ascending** — rows don't jump when new events arrive; they brighten in place and dim when they age out. Ages out after `--discovery-retention-secs` (default 60).
 
-6. **Status** *(always visible)* — three lines: elapsed · frames · unique IDs · marks · snapshots; then current tunables (`z=… ratio=…× d7=… suppressed=…`); then a key-cheat line. `dropped N` in red = the UI thread is falling behind; capture itself is unaffected (the worker thread writes `capture.log` directly).
+```
+  0x290  ⊞  D3 b2,b5            ▁▁▁▂▃▅█▇▅▃▁▁  │  z=4.2   -0.4s
+▶ 0x4A1  ·  D0 b0                ▁▁▁▁▁▁▁▁▁▁█▁  │  z=∞    -1.1s
+  0x123  ↻  D4 b7                ▁▂▁▂▁▂▁▂▁▂▁▂  │  z=3.5  -1.2s
+```
+
+Five visual cues per row:
+
+- **Glyph** — `⊞` / `↻` / `·`; see [Cue reference](#cue-reference).
+- **Activity sparkline** (12 cells, aligned across rows) — each cell counts anomalies in one bucket of the retention window (5 s/cell at default). Aligned vertically: two IDs spiking in the same column fired together. A tall right-edge bar with blanks left = "just woke up"; a flat ramp across all 12 cells = persistent counter chatter.
+- **Co-occurrence accent** (colored arb token) — when ≥2 rows have their most recent event within ~300 ms AND in the last 3 s, their arb tokens go colored (cyan / magenta / green / yellow, recycling). Same color = those rows just fired together.
+- **Mark halo** (`▶ ` prefix + bold yellow arb) — when you press a mark hotkey, rows whose latest event falls inside the 500 ms mark window get `▶` for ~4 s. Bridges the continuous pane and the mark-driven pane during scripted procedures.
+- **Brightness decay** — rows render bright while `latest_ts < 20 s` old, then dim. Stable arb sort + brightness decay together make the pane readable while moving.
+
+Precedence when cues collide: mark halo > co-occurrence accent > expect-shape accent (operator gesture is the strongest signal).
+
+**Startup chatter.** First ~10 s of any session, every bit is in EWMA warmup (`z=∞`) and every flip surfaces — the pane lights up with `·`-glyph rows then settles. Wait it out; this is what catches once-per-session events (a kickstand flip) that a stricter warmup would hide.
+
+### 5. Active unknown bytes (`F5`; ADR 0008, render ADR 0012) — byte-level discovery
+
+For each (arb, byte), maintains a rolling-window range and a long EWMA baseline; surfaces bytes whose current range is `--byte-activity-ratio`× the baseline. Bytes covered by `signals.yaml` are excluded (they belong to the decoded pane). Each row: ID · byte · current value · sparkline · `peak=N.N×` · time-since-peak · shape hint (`sensor` / `boolean` / `counter` / `step` / `(first activity)`). D7 hidden by default (`Ctrl-D`). The `Ctrl-N` modal pulls from this pane.
+
+```
+  0x290 D2   value=234 / 0xEA   ▁▂▃▄▅▆▇█      │  peak=4.2×   -0.3s   sensor
+  0x4A1 D0   value=  3 / 0x03   ▁▁▁▁▁▁▁█      │  peak=∞      -1.1s   (first activity)
+[dim]  0x123 D4   value= 12 / 0x0C   ▁▂▁▂▁▂▁▂  │  peak=2.8×   -8.2s   counter[/dim]
+```
+
+Two-tier brightness (ADR 0012):
+
+- **HOT** (bright) — byte is currently above ratio OR was within `--byte-activity-hysteresis-secs` (default 5). Sparkline is live, sampled ~4 Hz from actual byte values.
+- **DIM** (`[dim]`-wrapped) — past hysteresis but within `--byte-activity-retention-secs` (default 30). Sparkline **freezes** at the snapshot from when activity ended — the peak shape that made you look is preserved through decay.
+- **Drop** — past retention. Row vanishes and `peak_ratio` resets, so the next episode for that byte starts clean.
+
+Rows sort by **peak ratio descending** (not current ratio), so a row that just hit `peak=5×` stays near the top through its decay even as the current ratio falls. `peak=∞` = byte was flat-zero through the whole baseline window and just woke up — the strongest possible signal.
+
+### 6. Status row (always visible)
+
+Three lines: elapsed · frames · unique IDs · marks · snapshots; current tunables (`z=… ratio=…× d7=… suppressed=…`, plus `expect=<shape> <glyph>` when the lens is armed); key-cheat line. `dropped N` in red = UI thread falling behind; capture itself is unaffected (the worker thread writes `capture.log` directly).
 
 Collapsed state is session-local — re-collapse next launch. Defaults are all-expanded so the layout never shifts on startup.
 
 ---
 
-## Visual language (Live anomalies + Active bytes)
+## Cue reference
 
-The two discovery panes share a column layout — `0x<arb> … <sparkline> │ <metric>` — so the eye reads them as one logical surface. The Live anomalies pane (ADR 0011) carries four extra cues that encode *what kind* of anomaly each row is and *when* it last fired.
-
-### Glyph (column 2 of each Live anomalies row)
-
-A one-character hint at the anomaly's shape, computed per row:
+### Live anomalies glyphs
 
 | Glyph | Means | What it usually is |
 |---|---|---|
-| `⊞` | ≥2 bits flipping on the same byte | A real signal change — multi-bit field updating in lockstep (gear position, indicator state, a multi-bit enum). Investigate first. |
-| `↻` | One bit; fast-cycling baseline (µ < 0.5 s); finite z | A counter-like bit had a tail interval. Usually a counter glitch or a brief bus stall, not a new signal. Lower priority unless one ID's `↻` repeats. |
-| `·` | Everything else — isolated single-bit flips | Either a rare event (kickstand, button) or warmup noise. Cross-check with the activity sparkline — a single spike = real event; a regular pattern = chatter. |
+| `⊞` | ≥2 bits flipping on the same byte | Real signal change — multi-bit field updating in lockstep (gear position, indicator, multi-bit enum). Investigate first. |
+| `↻` | One bit; fast-cycling baseline (µ < 0.5 s); finite z | Counter glitch or brief bus stall, not a new signal. Lower priority unless one ID's `↻` repeats. |
+| `·` | Everything else — isolated single-bit flips | Rare event (kickstand, button) or warmup noise. Cross-check with the sparkline — one spike = real event, regular pattern = chatter. |
 
-### Activity sparkline (12 cells, aligned across rows)
+### Expect-shape accent (`Ctrl-E`, ADR 0013)
 
-Each cell counts anomalies for that ID in one bucket of the retention window (default 60 s → 5 s per cell). Aligned vertically: **two IDs that spike in the same column fired together at roughly the same moment**. This is the cheapest co-occurrence indicator on the screen — scan down the rightmost columns of the sparklines and matching spikes jump out.
+Arming a shape (`sensor` / `counter` / `step` / `boolean`) gives matching rows in both discovery panes a **green-accented arb token**.
 
-A row with one tall bar to the right and blanks to the left = "this ID just woke up." A row with a flat ramp across all 12 cells = "this ID has been firing constantly through the whole window" (probably counter chatter that crossed the z threshold).
+- **Byte pane** — matches accented; non-matches `[dim]`-wrapped regardless of HOT tier; unclassified and `(first activity)` rows stay neutral (the row you're trying to find during the first ~1 s of a sweep shouldn't be punished).
+- **Anomaly pane** — accent only, no dimming (pane too dense). Expect-accent yields to co-occurrence accent and mark halo when both apply.
 
-### Co-occurrence accent (colored `0x<arb>` token)
-
-When ≥2 rows have their **most recent** event within ~300 ms of each other AND that event was in the last 3 s, the arb tokens go colored (cyan / magenta / green / yellow, recycling past four clusters). Same color = "those rows just fired together." Singletons stay plain.
-
-The activity sparkline shows historical co-occurrence (any time in the window); the accent shows *right-now* co-occurrence. Together: if you saw the bus react to your input and two rows now share a color, those two IDs are the most likely answer.
-
-### Mark halo (`▶ ` prefix + bold yellow arb)
-
-When you press a mark hotkey, the redesigned pane reuses the 500 ms mark window: any row whose latest event falls inside that window gets a leading `▶` and a bold-yellow arb token, persisting for ~4 s after the keypress. This is the soft bridge between the continuous pane and the mark-driven pane — you can stay watching the Live anomalies pane during a scripted procedure and the halo will mark "what touched the bus when you pressed the key" without making you glance away.
-
-Halo overrides co-occurrence accent for the affected rows (the operator's gesture is the strongest signal there is).
-
-### Brightness decay
-
-Rows render at default brightness while their `latest_ts` is recent (< 20 s old) and dim once they pass that threshold. The dim wrap goes around the whole row except an active halo. Recent activity = bright; idle history = dim. Combined with the stable arb sort, this is what makes the pane readable while moving: rows don't reorder, but fresh activity is visually unmissable.
-
-### Startup chatter
-
-The first ~10 s of any session, every bit is in EWMA warmup (`z=∞`) and every flip surfaces. The pane lights up with `·`-glyph rows; rows fade once the bus settles into its learned baseline. Wait it out — this is what catches rare-but-real events (a single kickstand flip) that a stricter warmup would hide.
-
-### Active unknown bytes — HOT / DIM tiers + frozen sparkline (ADR 0012)
-
-The byte pane uses the **same brightness model** as Live anomalies, with a slightly different shape because byte rows preserve a peak shape rather than firing-density buckets.
-
-- **HOT** — bright. The byte is currently above the ratio threshold (`active_now`) OR was within `--byte-activity-hysteresis-secs` (default 5 s). Sparkline is live, sampled at ~4 Hz from the actual byte values; the eye reads "this byte is doing something right now."
-- **DIM** — `[dim]`-wrapped. The byte stopped being above threshold more than `hysteresis_secs` ago, but hasn't yet aged out of `--byte-activity-retention-secs` (default 30 s). Sparkline shows the **frozen** snapshot from when activity ended, not the post-activity flat line. The peak shape that made you look in the first place is preserved through decay.
-- **Drop** — past `retention_secs`. The row vanishes AND the byte's `peak_ratio` resets, so the next activity episode starts clean.
-
-The transition from HOT to DIM is the "this just happened" vs "this happened a moment ago" cue. The transition from DIM to drop is the "it's no longer interesting" cue. The 30 s default gives the operator ~25 s after the bright tier to act on a row.
-
-### `peak=N.N×` + `-N.Ns` annotation (Active bytes only)
-
-In the byte pane, the trailing metric is the **peak** ratio reached during the current activity episode, plus the time since that peak. Both persist intact through HOT and DIM — the current ratio drops to near 0 in the tail and would be useless to show, but the peak tells you how loud the row was at its loudest.
-
-- `peak=4.2×` — the byte swept 4.2× wider than its baseline at its loudest moment in this episode.
-- `peak=∞` — the byte was previously flat-zero across the whole baseline window; the first sweep tripped against `BASELINE_FLOOR` and ratio went to infinity. Strongest possible signal.
-- `-0.3s` / `-8.2s` — wall-clock seconds since the peak. Inside HOT this is usually small; inside DIM it grows with age.
-
-Rows are **sorted by peak ratio descending** (not current ratio). A row that just hit `peak=5×` stays near the top through its decay tier even as its current ratio drops — the operator doesn't watch the row sink to the bottom of the pane as they're trying to read it.
+The lens is a viewing aid, never a filter — every row the classifier surfaced still appears. Status row shows `expect=<shape> <glyph>` while armed.
 
 ---
 
@@ -386,7 +381,7 @@ The `--byte-activity-hysteresis-secs` value must be ≤ this; otherwise the DIM 
 
 #### `--show-d7` (live: `Ctrl-D`, default off)
 
-D7 is the universal checksum byte (see `findings/can/byte-d7-checksum-hypothesis.md`) — it cycles every frame on every always-on ID and would otherwise dominate both discovery panes. Toggle on only when you specifically suspect a non-checksum signal on D7 of one ID, or you're investigating the checksum algorithm itself.
+D7 is the universal checksum byte (see `findings/can/byte-d7-cycle-hash.md`) — it cycles every frame on every always-on ID and would otherwise dominate both discovery panes. Toggle on only when you specifically suspect a non-checksum signal on D7 of one ID, or you're investigating the checksum algorithm itself.
 
 #### `--show-suppressed` (live: `Ctrl-Y`, default off)
 
@@ -394,16 +389,7 @@ Shows bits the EWMA scored *below* the z-threshold in the mark-driven flipped pa
 - "Why isn't bit X surfacing?" — toggle on to see the z-score the EWMA actually computed for it. If z=2.8 and threshold is 3.0, that's why; lower the threshold or accept the verdict.
 - "I think the threshold is too aggressive in this session." — quick way to eyeball how many real-looking rows are sitting just under it before committing to a permanent threshold change.
 
-### Internal EWMA constants (not user-tunable)
-
-For completeness — these aren't flags but they shape behaviour:
-
-- `EWMA_ALPHA = 0.06` — effective ~32-flip window for the bit-flip baseline. A bit that changes regime (engine on → off) re-learns within ~32 new flips.
-- `SIGMA_FLOOR = 0.005` — minimum σ for the z-score denominator (5 ms). Prevents z from exploding on perfectly-periodic counters where σ would otherwise collapse to zero.
-- `ACTIVITY_EWMA_ALPHA = 0.02` — effective ~100-sample window for `baseline_range_ewma`. Byte baselines are slower-moving than bit baselines.
-- `BASELINE_FLOOR = 4` — minimum baseline range. Suppresses LSB jitter; also what makes the first-ever sweep of a previously-flat byte trip with ratio → ∞.
-
-Change these in `scripts/live_view/constants.py` only if you have a specific reason — they're tuned in the relevant ADRs (0007, 0008) and changing them invalidates the defaults of the user-facing flags above.
+EWMA internals (window sizes, σ floor, baseline floor) live in `scripts/live_view/constants.py` and are tuned in ADRs 0007 / 0008. Don't touch them unless you've read those.
 
 ### Summary card
 

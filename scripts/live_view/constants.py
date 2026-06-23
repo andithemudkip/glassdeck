@@ -37,4 +37,6 @@ ACTIVE_BYTES_PANE_ROWS = 10
 
 # ADR 0012 — byte-activity retention + decay + frozen sparkline
 BYTE_ACTIVITY_RETENTION_SECS = 30.0  # total time a row stays visible past last_active_ts
-BYTE_ACTIVITY_SAMPLE_SECS = 0.25     # display-buffer sample cadence (~4 Hz)
+BYTE_ACTIVITY_SAMPLE_SECS = 0.125    # display-buffer sample cadence (~8 Hz)
+BYTE_SPARKLINE_WIDTH = 24            # wider than the global 12 so short bursts (~2-3 s) render as a flowy line, not 1-2 cells
+BYTE_BURST_FREEZE_DELAY_SECS = 0.125 # snapshot frozen_buffer this long after the byte's value stops changing — captures the burst on the right edge of the buffer rather than letting it drift left during the 2 s detection slide

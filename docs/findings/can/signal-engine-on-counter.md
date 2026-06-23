@@ -60,4 +60,4 @@ If the rate is constant under RPM change, it's a seconds counter and can be read
 - [`docs/experiments/2026-06-21-bit-transition-scan.md`](../../experiments/2026-06-21-bit-transition-scan.md) — per-bit toggle table for `541` D4.
 - [`docs/experiments/2026-06-17-payload-diff-idle.md`](../../experiments/2026-06-17-payload-diff-idle.md) — original byte-level CRC-LIKE tag (now superseded by the bit-level structural read).
 
-See also: [[byte-d7-checksum-hypothesis]] (different ID, separate algorithm), [[always-on-broadcast-ids]].
+See also: [[byte-d7-cycle-hash]] (different ID, separate algorithm), [[always-on-broadcast-ids]].

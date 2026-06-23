@@ -6,7 +6,7 @@ related:
   findings:
     - can/always-on-broadcast-ids
     - can/post-kill-decay-groups
-    - can/byte-d7-checksum-hypothesis
+    - can/byte-d7-cycle-hash
   references:
     - ktm-can-decoder
   experiments:
@@ -115,7 +115,7 @@ If Phase A's clutch bit was clean and unambiguous, this can be skipped. Otherwis
 
 Log: [`logs/2026-06-19-gear-cycle-clutch-A-clutch-only/`](../../logs/2026-06-19-gear-cycle-clutch-A-clutch-only/). Five clutch pumps, neutral, engine off. Analysis: [`scripts/clutch_scan.py`](../../scripts/clutch_scan.py).
 
-**KTM clutch hypothesis (`129` D0 bit 3) rejected.** `129` D0 is `0x00` for every one of the 2,595 frames in the active window — no bit there can carry the clutch state. Bus-wide scan across all 11 always-on IDs and bytes D0–D6 finds **no bit whose transitions correlate with the five clutch-in events**. The only non-D7 byte with any cardinality during the active window is `541` D6, which increments monotonically from `0x75` to `0xA8` at ~1 count/sec across the full capture — present in the settle window too, unrelated to the lever. D7 churn is consistent with [[byte-d7-checksum-hypothesis]] (same per-second rates settle vs active in every ID).
+**KTM clutch hypothesis (`129` D0 bit 3) rejected.** `129` D0 is `0x00` for every one of the 2,595 frames in the active window — no bit there can carry the clutch state. Bus-wide scan across all 11 always-on IDs and bytes D0–D6 finds **no bit whose transitions correlate with the five clutch-in events**. The only non-D7 byte with any cardinality during the active window is `541` D6, which increments monotonically from `0x75` to `0xA8` at ~1 count/sec across the full capture — present in the settle window too, unrelated to the lever. D7 churn is consistent with [[byte-d7-cycle-hash]] (same per-second rates settle vs active in every ID).
 
 No new arbitration ID appeared during pumping — the same 11 always-on IDs were present in pre-key, settle, active and post windows. Clutch is not a "new ID on demand" signal at this connector either.
 

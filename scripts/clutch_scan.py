@@ -111,7 +111,7 @@ def main() -> int:
     p.add_argument(
         "--exclude-d7",
         action="store_true",
-        help="Exclude byte D7 (known checksum/counter — see byte-d7-checksum-hypothesis).",
+        help="Exclude byte D7 (known checksum/counter — see byte-d7-cycle-hash).",
     )
     args = p.parse_args()
 
