@@ -1,0 +1,142 @@
+name: engine-driven-rear-spin
+description: >
+  Engine-on, rear paddock stand, 1st gear. Hold the throttle at several
+  RPM setpoints with the clutch fully out — engine drives the rear
+  wheel through the gearbox. Steady-state speeds let us read 12D D2,
+  D3, D5, D6 at constant operating points: pins byte-to-km/h scaling
+  via RPM × known gearing, surfaces the D3/D5 high bytes if the uint16
+  hypothesis holds, and disambiguates D2 vs D6.
+experiment: 2026-06-23-engine-driven-rear-spin
+
+# Timing convention: marks fire at STEP START — the moment the rider is
+# cued to start holding the throttle at the named setpoint. Bus broadcast
+# is keyed off the actual throttle position; the dash/rider visual is
+# secondary. Analysis windows are the held steady-state portion, not the
+# transients.
+#
+# Setpoints are RPM targets in 1st gear, chosen against the KTM 390
+# platform gearing (primary 80/30, 1st 32/12, final 45/15 → 21.33:1
+# total) and 150/60ZR17 rear (~1.922 m circumference). At those ratios:
+#   2000 RPM → 10.8 km/h (below both byte ceilings)
+#   2500 RPM → 13.5 km/h (still below)
+#   3500 RPM → 18.9 km/h (past D6's 16 km/h ceiling → D5 emerges)
+#   4500 RPM → 24.3 km/h (D5 stays on, D2 still single-byte)
+#   5500 RPM → 29.7 km/h (past D2's 25.5 km/h ceiling → D3 emerges)
+# Two setpoints below all ceilings (clean single-byte regression), one
+# crossing D5's ceiling, one above D5 but below D3, one crossing D3's.
+# Rider holds each by feel against the tach — drift ±200 RPM is fine
+# because the analysis reads RPM from CAN frame-by-frame anyway.
+#
+# Rests between holds are at IDLE (engine running, clutch out, gear in,
+# wheel turning at idle speed) — keeps the data clean rather than going
+# clutch-in then clutch-out repeatedly. Idle-in-gear is itself a useful
+# data point, so we hold a long idle-in-gear settle first.
+#
+# Engine cooling: no airflow, so high RPM holds are short (~10 s) and
+# return-to-idle rests are longer (~10 s). The rider should watch the
+# coolant temp on the dash and abort if it approaches fan-on territory.
+
+steps:
+  # ---------------------------------------------------------------- Setup
+  - prompt: "Bike on rear paddock stand, FRONT WHEEL STRAIGHT and braced. Key OFF, neutral, kill RUN. Hands clear. Recording silence."
+    duration_secs: 6
+
+  - prompt: "Turn key ON. Confirm dash boots normally. Hands off."
+    duration_secs: 30
+    countdown_from: 3
+    mark: { key: mark, label: "key on" }
+
+  - prompt: "Press STARTER. Let it catch — throttle closed."
+    duration_secs: 10
+    countdown_from: 3
+    mark: { key: start, label: "starter pressed" }
+
+  - prompt: "Idle settle — engine on, NEUTRAL, hands off. Clean idle baseline."
+    duration_secs: 30
+    mark: { key: idle_settled, label: "idle settled (neutral)" }
+
+  # ----------------------------------- Phase A — Engage 1st, idle-in-gear baseline
+  - prompt: >
+      PHASE A — Clutch IN. Shift to 1st. Bring clutch SLOWLY out until
+      the rear wheel starts turning at idle. Throttle CLOSED. Both
+      feet ready. Left hand stays off the bike for the rest of the
+      session — throttle only with the right hand.
+    duration_secs: 15
+
+  - prompt: "Idle-in-gear hold — clutch fully out, throttle CLOSED, hands clear of chain. Reading rear wheel at idle through 1st."
+    duration_secs: 15
+    countdown_from: 3
+    mark: { key: setpoint, label: "Phase A — idle in 1st" }
+
+  # ----------------------------------- Phase B — RPM setpoint sweep (1st gear)
+  - prompt: >
+      PHASE B — RPM sweep in 1st gear. Five throttle setpoints, ~10 s
+      hold each, returning to idle-in-gear between. Watch coolant temp
+      on the dash — if it climbs unexpectedly, abort.
+    duration_secs: 10
+
+  - prompt: "Bring RPM to ~2000 and hold steady. Dash tach is your guide."
+    duration_secs: 12
+    countdown_from: 3
+    mark: { key: setpoint, label: "B1 — ~2000 RPM in 1st" }
+
+  - prompt: "Return to idle-in-gear (throttle CLOSED). Engine cool down."
+    duration_secs: 10
+
+  - prompt: "Bring RPM to ~2500 and hold steady."
+    duration_secs: 12
+    countdown_from: 3
+    mark: { key: setpoint, label: "B2 — ~2500 RPM in 1st" }
+
+  - prompt: "Return to idle-in-gear. Cool down."
+    duration_secs: 10
+
+  - prompt: "Bring RPM to ~3500 and hold steady."
+    duration_secs: 12
+    countdown_from: 3
+    mark: { key: setpoint, label: "B3 — ~3500 RPM in 1st" }
+
+  - prompt: "Return to idle-in-gear. Cool down — extra time, engine is warming up."
+    duration_secs: 15
+
+  - prompt: "Bring RPM to ~4500 and hold steady."
+    duration_secs: 12
+    countdown_from: 3
+    mark: { key: setpoint, label: "B4 — ~4500 RPM in 1st" }
+
+  - prompt: "Return to idle-in-gear. Cool down."
+    duration_secs: 15
+
+  - prompt: "Bring RPM to ~5500 and hold steady. Final setpoint."
+    duration_secs: 12
+    countdown_from: 3
+    mark: { key: setpoint, label: "B5 — ~5500 RPM in 1st" }
+
+  - prompt: "Return to idle-in-gear. Cool down."
+    duration_secs: 15
+
+  # ----------------------------------- Phase C — Re-baseline idle-in-gear
+  - prompt: "Idle-in-gear re-baseline — confirms readings haven't drifted across the sweep (thermal, ABS-fault-related, etc.)."
+    duration_secs: 15
+    countdown_from: 3
+    mark: { key: setpoint, label: "Phase C — idle in 1st (post-sweep)" }
+
+  # ----------------------------------------------------------- Shutdown
+  - prompt: "Clutch IN. Shift to NEUTRAL. Clutch OUT. Confirm N indicator."
+    duration_secs: 12
+    countdown_from: 3
+    mark: { key: mark, label: "back to neutral" }
+
+  - prompt: "Idle settle in neutral. Hands off."
+    duration_secs: 10
+
+  - prompt: "Kill switch → STOP. Let decay finish."
+    duration_secs: 12
+    countdown_from: 3
+    mark: { key: kill, label: "kill switch" }
+
+  - prompt: "Key OFF when silent. Hold 3 s of tail silence."
+    duration_secs: 6
+
+  - prompt: "Done. Press q to stop capture and fill in session.md (note ABS lamp behaviour, any dash anomalies, actual RPM held vs target per setpoint, coolant temp at session end)."
+    duration_secs: null

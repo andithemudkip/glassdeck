@@ -1,113 +1,102 @@
 ---
 area: can
-status: provisional
+status: confirmed
 established_by:
   - 2026-06-22-wheel-spin-paddock-stand
+  - 2026-06-23-engine-driven-rear-spin
 references:
   - ktm-can-decoder
 ---
 
-# Rear wheel speed — `12D` bytes D2 and D6
+# Rear wheel speed — `12D` D5:D6 (primary uint16) + D2 (coarse mirror)
 
-Rear wheel rotation on the 2020 Husqvarna Svartpilen 401 is broadcast in arbitration ID **`0x12D`** at two byte positions: **D2** and **D6**. Both bytes are STATIC `0x00` when the rear wheel is stationary, and ramp up together with smooth mechanical-decay envelopes when the wheel is spun.
+Rear wheel speed on the 2020 Husqvarna Svartpilen 401 is broadcast in arbitration ID **`0x12D`** at two locations, both tracking the same physical quantity at different scales:
 
+| Bytes | Encoding | Scale | Behaviour |
+|------:|----------|-------|-----------|
+| **D5:D6** | big-endian uint16 (D5 = high, D6 = low) | **≈ 1/16 km/h per LSB** (0.0625 km/h) | Primary signal. Full range, clean. |
+| **D2**    | uint8 alone (D3 is **not** a high byte) | **≈ 1/10 km/h per LSB** | Coarse mirror. **Wraps modulo 256 above ~25.5 km/h.** |
+| D3        | STATIC `0x00`                            | —     | Not a high byte for D2. Refuted by engine-driven sweep where D2 wrapped through 0x00..0xFF while D3 stayed at 0x00. |
+
+```python
+rear_wheel_kmh = ((data[5] << 8) | data[6]) / 16.0       # primary
+rear_wheel_kmh_coarse = data[2] / 10.0                   # only valid below ~25.5 km/h
 ```
-rear_wheel_moving = (data[2] != 0) or (data[6] != 0)
-```
 
-Promoted from a paddock-stand hand-spin session: 8 hard-push trials produced peak D2 values of 0x42–0x4B and peak D6 values of 0x65–0x75, with envelopes lasting 1.0–2.2 s per push. 6 gentle-push trials produced peak D2 values of 0x1D–0x2D with much shorter envelopes (~0–0.5 s). Across all 1058 motion frames in the session, D2 = 0 ⇔ D6 = 0, and the bytes ramp/decay together with no observed dropouts.
+D5:D6 has full speed range and clean integer behaviour. Use it as the source of truth. D2 is useful as a sanity check at low speed but should not be relied on alone.
 
-**Unit scaling and the exact relationship between D2 and D6 are open** — see § Open below. This finding is `provisional`: the **decode location** (`12D` D2 + D6 = rear wheel speed) is well-supported, the **encoding** is not.
+## Evidence — engine-driven sweep ([[2026-06-23-engine-driven-rear-spin]])
 
-## Why two bytes for one wheel?
+7 steady-state setpoints in 1st gear, ~8 s analysis window per setpoint, with RPM read from `120` D0:D1 frame-by-frame:
 
-`12D` D2 and D6 ramp together but with a **speed-dependent ratio**: at peak speeds (Phase B hard pushes), D6/D2 ≈ 1.53× consistently across 7 pushes. At decay tail values (e.g. D2=29 → D6=34), the ratio drops to ~1.17×. A constant ratio would imply the two bytes are linear scalings of the same quantity; a varying ratio implies they are different quantities that happen to be co-moving.
+| Setpoint | RPM μ | D5:D6 BE (μ raw) | km/h @ 1/16 LSB | D2 μ | D3 | D5 |
+|----------|------:|------------------:|----------------:|-----:|---:|---:|
+| Idle in 1st (Phase A) | 1706 | 161.8 | 10.11 | 100.5 | 0x00 | 0x00 |
+| B1 ~2000 RPM | 1975 | 186.6 | 11.66 | 115.6 | 0x00 | 0x00 (rare 0x01) |
+| B2 ~2500 RPM | 2131 | 207.9 | 13.00 | 124.1 | 0x00 | 0x00 (rare 0x01) |
+| B3 ~3500 RPM | 3017 | 290.8 | 18.18 | 171.6 | 0x00 | **0x01** ← D5 emerges |
+| B4 ~4500 RPM | 3944 | 377.1 | 23.57 | 221.9 | 0x00 | 0x01 |
+| B5 ~5500 RPM | 4966 | 474.3 | 29.64 | wraps | 0x00 | **0x01..0x02** |
+| Idle (Phase C, post-sweep) | 1698 | 161.8 | 10.11 | 100.5 | 0x00 | 0x00 |
 
-Three working hypotheses:
+Linear regression km/h = a·raw + b over all 7 setpoints (predicted km/h from RPM × known gearing as the ground truth):
 
-1. **D2 is filtered/averaged, D6 is raw.** During the fast acceleration of a hand-push, the filtered estimate (D2) lags the raw count (D6), so D6 leads at peak. During the slow decay, the filter catches up.
-2. **Different scaling laws** — e.g. D2 linear in wheel-RPM with no offset, D6 linear with an additive bias term. Possible if the two bytes serve different consumers (ABS controller wants one, dashboard wants another).
-3. **D6 is the raw tone-ring count per CAN cycle (10 ms period), D2 is an ABS-derived speed estimate.** Tone-ring count is integer-precise at high speeds and noisy at very low speeds; an ABS estimate may filter the noise but introduce lag.
+| Candidate decode | Slope (km/h/LSB) | Intercept | RMS residual |
+|------------------|-----------------:|----------:|-------------:|
+| **D5:D6 BE**     | **0.05633**      | **+0.071** | **0.019**    |
+| D2 alone         | -0.0059          | +15.7     | 6.3 (wraps)  |
+| D2:D3 LE         | -0.0059          | +15.7     | 6.3 (D3 = 0) |
+| D5:D6 LE         | -6e-5            | +17.3     | 6.3          |
 
-This experiment can't disambiguate. A steady-state spin (motor-driven, not hand-driven) would hold the wheel at a fixed speed for several seconds and let us read both bytes at a stable operating point — that would settle it.
+D5:D6 BE wins by orders of magnitude. The slope **0.05633** is within ~10% of the binary-friendly **0.0625 km/h/LSB (= 1/16)**; the gap is attributable to back-of-envelope gearing/tyre numbers and resolves once a road capture or authoritative gearing source pins the unit. Until then, **encoding = uint16 BE, scale = ~1/16 km/h** is the best-fit and lossless interpretation.
+
+### Why D2 mirrors D5:D6
+
+At setpoints where neither byte wraps (Phase A idle, B1), the **D6/D2 ratio is 1.610 and 1.614** — matching the 16/10 = 1.6 scaling-ratio prediction within noise. Both bytes report the same physical quantity at different resolutions:
+
+- D2 = km/h × 10 (uint8, wraps at 25.5 km/h, no companion high byte)
+- D5:D6 = km/h × 16 (uint16, clean to at least ~31 km/h, more above)
+
+The three working hypotheses in the previous version (filtered-vs-raw, different scaling laws, ABS-vs-tone-ring) were all too clever. Outcome: **same quantity, different scales** — the simplest explanation. The decay-tail ratio difference observed in the hand-spin session (~1.17× at low decoded values) was almost certainly noise dominating the small denominators, not a real speed-dependent shape.
+
+### High-byte ceiling tests (clean falsification)
+
+- **D6 ceiling (16 km/h):** D5 emerged as `0x01` at B3 (3500 RPM, decoded 18.18 km/h) and stayed at `0x01` through B4, then jumped to `0x02` at B5 (29.64 km/h, second wrap). Behaviour exactly matches a uint16 BE encoding.
+- **D2 ceiling (25.5 km/h):** D2 wrapped through the full `0x00..0xFF` range at B5 while **D3 stayed at `0x00`**. The "D2:D3 = uint16" hypothesis is cleanly refuted. D2 is a standalone uint8.
 
 ## Why the OEM speedometer reads 0 during a rear-only spin
 
-The dashboard speedometer stays at 0 km/h throughout a rear-only paddock-stand spin, even when these `12D` bytes are showing large values. Consistent reading:
+D5:D6 and D2 both responded to the rear-only spin; the dashboard speedometer stayed at 0 km/h regardless, and the **ABS warning lamp stayed lit throughout** (independently confirmed in the [[2026-06-23-engine-driven-rear-spin]] session — ABS normally extinguishes at ~6 km/h per [[dash-warning-lights]], but that threshold reads the front wheel, which never moved). Consistent split:
 
-- `12D` D2 + D6 are **rear-wheel-only** signals (only the rear was spinning; both bytes responded).
-- The OEM speedo reads its value from a **different byte sourced from the front wheel**, which was stationary throughout, so the speedo correctly reads 0.
-- The front-wheel-speed byte location is **not yet identified**. A future engine-off front-stand spin or a real motion capture (bike rolled in neutral with both wheels turning) will resolve it.
-
-This split — speedo reads front, body-controller reads rear or OR-gates both — is consistent with the auto-headlight observation from the same session: spinning the rear wheel briskly trips the low beam even though the dash speedo never moves. Body controller is reading the rear sensor for its "vehicle moving" logic.
+- **Rear-wheel readers** (auto-headlight, possibly some traction logic) responded to the spin via these bytes.
+- **Front-wheel readers** (OEM speedo, ABS-lamp-extinguish logic) all stayed at zero, because the front sensor was static.
+- **Front-wheel byte location is still unidentified.** KTM prediction (see Cross-walk below) places it at `12D` D0..D1 BE uint16; both bytes were STATIC `0x00` throughout this rear-only session, consistent with that prediction but not yet a test of it. Resolves on a front-only spin or any real motion capture (see [[2026-06-23-first-bike-roll]]).
 
 ## Cross-walk vs KTM
 
-The ktm-can decoder ([reference](../../references/ktm-can-decoder.md)) places wheel speeds at `12B` on the 2020 KTM 690 Enduro R, broadcast at 10 ms:
+KTM's ktm-can decoder ([reference](../../references/ktm-can-decoder.md)) places wheel speeds on the 2020 KTM 690 Enduro R at `12B` D0..D3 (front uint16 BE, then rear uint16 BE). On the Svartpilen 401:
 
-```
-KTM 12B   D0..D1  front wheel  (big-endian uint16, raw — no km/h scaling)
-          D2..D3  rear wheel   (big-endian uint16, raw)
-          D4      unknown
-          D5..D7  tilt + lean  (two 12-bit signed values sharing D6)
-```
+- **ID relocated** `12B` → `12D` (same 10 ms period, different arbitration ID).
+- **Rear wheel byte position changed: KTM D2:D3 BE → Husqvarna D5:D6 BE.** The byte pair moved, the encoding (BE uint16) and the position-within-payload pattern (high-byte first) are preserved.
+- **D0..D1 still predicted as front-wheel BE uint16** based on KTM's layout. Stayed `0x00 0x00` throughout this rear-only session — consistent with prediction, not a confirmation.
+- **D2 is a Husqvarna addition** — KTM has rear wheel speed there but as the high byte of a uint16; Husqvarna repurposes D2 as a standalone coarse mirror of the rear wheel speed at 0.1 km/h scale. The Bosch ECU is reusing the byte position for a related but distinct purpose.
+- **D5..D6 was KTM's tilt/lean.** The 2020 Svartpilen 401 has no lean sensor, freeing those bytes — Husqvarna repurposed them for the primary wheel-speed uint16. This is a clean lean-slot-for-wheel-slot swap, with the same encoding family (BE uint16) preserved.
+- **D7** is the universal cross-ID 6-cycle byte ([[byte-d7-cycle-hash]]) — not data — same as on KTM.
 
-KTM test vector (from `ktm-can/tests/test_decoder.py::test_12B`): frame `12B 00 00 02 16 00 02 8F FD` → rear_wheel = 534 (= `0x0216`), front_wheel = 0, tilt = 40, lean = -3. **The decoder emits raw uint16; KTM does not document a km/h conversion factor.**
-
-### How `12D` on Husqvarna lines up byte-for-byte
-
-| Byte | KTM `12B` role         | Husqvarna `12D` (observed)                     |
-|------|------------------------|------------------------------------------------|
-| D0   | front wheel high byte  | STATIC `0x00` (front not spun this session)    |
-| D1   | front wheel low byte   | STATIC `0x00`                                  |
-| D2   | rear wheel high byte   | **Varies with rear motion** (this finding)     |
-| D3   | rear wheel low byte    | STATIC `0x00` even during all 836 Phase B motion frames |
-| D4   | unknown                | STATIC `0x00`                                  |
-| D5   | tilt high byte (8 bits)| STATIC `0x00`                                  |
-| D6   | tilt low / lean high   | **Varies with rear motion** (Husq-specific repurpose) |
-| D7   | lean low byte          | Universal D7 6-cycle byte ([[byte-d7-cycle-hash]]) — not data |
-
-So **D2 sits exactly where KTM puts the rear-wheel uint16 high byte**, and the byte that varies on Husqvarna matches that role. The strong implication for the still-unknown front-wheel byte is:
-
-> **Prediction: `12D` D0..D1 carries front wheel speed** in the same big-endian uint16 encoding KTM uses for rear. Testable on a front-only spin or any real motion capture — both bytes should ramp together with front motion only.
-
-### Why D3 may stay at zero
-
-KTM's test frame has D2 = `0x02`, D3 = `0x16` (full uint16 = 534) — clearly using the LSB at low speeds. Husqvarna's D3 stays at `0x00` across all 836 motion frames in this capture (hand-spin speeds, peak D2 = `0x4B`). Three working interpretations:
-
-1. **Husqvarna uses single-byte resolution at D2.** The KTM uint16 encoding doesn't transfer — Husqvarna's simpler ABS module quantises wheel speed to single-byte precision and leaves D3 as padding.
-2. **D3 activates above a speed/quality threshold** that hand-spin never reaches. Hand-spin is bursty and slow; the actual rolling-bike use case may exercise D3.
-3. **The encoding is something other than KTM's uint16** — e.g. D2 is tone-ring teeth per CAN cycle, integer-valued, no LSB needed.
-
-Resolves on a road capture where D2 reaches its likely upper range. If D3 stays 0 even at realistic riding speeds, interpretation (1) is confirmed and the rear-wheel resolution is the same as the byte's resolution — much coarser than KTM.
-
-### D6 — Husqvarna-specific repurpose
-
-KTM uses D5..D7 for lean/tilt (12-bit signed integers sharing D6). The 2020 Svartpilen 401 has no lean angle sensor — its ABS module is simpler than the KTM 690's — so D5..D7 are free to repurpose. Husqvarna uses:
-
-- **D5**: STATIC `0x00` (unused / padding).
-- **D6**: A wheel-motion-derived quantity, varies with rear-wheel spin in this capture, ratio D6/D2 ~1.53× at peak and ~1.17× at decay tail.
-- **D7**: The universal cross-ID 6-cycle byte ([[byte-d7-cycle-hash]]), unrelated to wheel speed.
-
-So D6 is a genuine new signal not present in KTM's mapping — the lean/tilt slot has been replaced with a wheel-derived value. See the "Why two bytes for one wheel?" section above for hypotheses on what D6 actually encodes.
-
-### Patterns and confidence
-
-- This is the third ID-level relocation in the Husqvarna ↔ KTM cross-walk: kill switch (KTM `120` D3 bit 4 → Husq `541` D2 bit 4), wheel speed (KTM `12B` → Husq `12D`). The relocated IDs all sit in the same broadcast-period cohort as the KTM original (10 ms in this case), suggesting the Bosch ECU's broadcast scheduler structure is preserved but ID numbers are platform-specific.
-- **Byte positions D0..D3 appear preserved** (front pair + rear pair). **Byte positions D4..D7 differ** (Husqvarna repurposes D5..D7 from KTM's lean/tilt to "padding + extra wheel signal + universal checksum"). This is a cleaner pattern than the earlier "`540` shifts one byte earlier" observation — `12D` doesn't shift, it just truncates the KTM layout and adds a new signal.
+Refines the earlier "D0..D3 preserved, D4..D7 differs" hypothesis: Husqvarna kept KTM's D0..D1 (front) and replaced D2..D3 (KTM's rear) with a D2-coarse + D5..D6-primary split, freed by the missing lean sensor.
 
 ## Evidence
 
-- [`docs/experiments/2026-06-22-wheel-spin-paddock-stand.md`](../../experiments/2026-06-22-wheel-spin-paddock-stand.md) — Result section (per-push table, peak values, envelope statistics).
-- [`logs/2026-06-22-wheel-spin-paddock-stand/`](../../../logs/2026-06-22-wheel-spin-paddock-stand/) — raw capture, 77 694 frames.
-- [`scripts/wheel_spin_scan.py`](../../../scripts/wheel_spin_scan.py) — per-push analysis script.
+- [[2026-06-22-wheel-spin-paddock-stand]] — initial location of D2 and D6 as motion-responsive bytes (hand-spin, no steady-state).
+- [[2026-06-23-engine-driven-rear-spin]] — promoted to `confirmed`: steady-state speeds via RPM × gearing pinned the encoding (D5:D6 BE uint16 ≈ 1/16 km/h), refuted D2:D3 as a uint16, and resolved the D2/D6 dual-byte question as same-quantity-different-scales.
+- [`scripts/engine_driven_rear_spin.py`](../../../scripts/engine_driven_rear_spin.py) — per-setpoint analysis, regression, ratio table.
+- [`scripts/wheel_spin_scan.py`](../../../scripts/wheel_spin_scan.py) — per-push analysis from the earlier hand-spin session.
 
 ## Open
 
-- **Byte-to-km/h scaling.** No real-speed reference in this capture, and KTM's decoder emits raw uint16 with no km/h factor either — so the cross-walk doesn't unlock the units. Resolves on a road or roll-the-bike capture with the OEM speedo visible. Promote from `provisional` to `confirmed` once a calibration trace exists.
-- **D6 vs D2 — what's actually different.** Three working hypotheses above; need a steady-state spin or a long road capture to discriminate.
-- **Front wheel speed.** Location predicted by the KTM cross-walk to be `12D` D0..D1 as big-endian uint16 (KTM puts it there on `12B`). Both bytes are STATIC `0x00` in this rear-only capture, consistent with the prediction. Resolves on a front-only spin (Phase C of [[2026-06-22-wheel-spin-paddock-stand]], deferred for lack of a front stand) or any real motion capture.
-- **Auto-headlight as a derived signal.** No separate "headlight on" bit appears in the always-on broadcast (full-bit scan returned only D2 bit 6, which is just the high bit of the speed byte). Hypothesis: the body controller drives the headlight directly from this byte (or an internal "vehicle moving" line) with no CAN intermediate. Threshold appears to be near `12D` D2 ≥ 0x40, but unconfirmed — needs a session with synchronised `b` (headlight transition) marks. See experiment Follow-ups.
-- **What happens above hand-spin speeds.** Phase B peak D2 was 0x4B (75); we have no idea what the byte does at riding speeds (0x80? 0xFF? overflow? wraparound?). Open until a road capture.
+- **Exact LSB.** Best-fit slope 0.05633 vs binary-friendly 0.0625 differs by ~10%, almost certainly because the gearing/tyre numbers are back-of-envelope. Resolves either by (a) sourcing authoritative KTM 390 platform gearing + measured rolling circumference, or (b) cross-checking against the OEM speedo on a low-speed roll ([[2026-06-23-first-bike-roll]]). If the speedo reads ~10% lower than 1/16 km/h × raw, the encoding is actually 0.05633 (some non-binary unit); if the speedo agrees with 1/16 km/h × raw, the gearing model is off and the encoding is 1/16 km/h.
+- **Front wheel speed location.** KTM cross-walk predicts `12D` D0..D1 BE uint16. Untestable in any rear-only session; needs front-stand spin or real bike motion ([[2026-06-23-first-bike-roll]]).
+- **D4 STATIC `0x00`.** Unused in everything observed so far; possibly reserved for a third signal (e.g. estimated vehicle speed combining both wheels). No motivation to chase until/unless something exercises it.
+- **High-speed wrap behaviour.** D5:D6 BE handles wraps cleanly through to 29.64 km/h (= 0x1DA in the encoding); above ~256 km/h the uint16 would wrap, far beyond anything this bike will see. D2 wraps every 25.5 km/h forever — a confirmed quirk, no follow-up needed.
 
-See also: [[always-on-broadcast-ids]], [[ktm-can-decoder]], [[signal-side-stand]] (for the `540` shift pattern, contrast with this `12B`→`12D` ID move).
+See also: [[always-on-broadcast-ids]], [[ktm-can-decoder]], [[signal-side-stand]] (contrast with the `540` -1-byte shift pattern — `12D` doesn't shift, it swaps roles within the payload).

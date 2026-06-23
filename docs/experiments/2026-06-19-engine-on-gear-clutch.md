@@ -1,20 +1,34 @@
 ---
 date: 2026-06-19
-status: planned
+status: superseded
 phase: 1
 related:
   findings:
     - can/always-on-broadcast-ids
     - can/signal-gear-position
+    - can/signal-clutch
     - can/byte-d7-cycle-hash
   references:
     - ktm-can-decoder
   experiments:
     - 2026-06-18-gear-cycle-clutch
+    - 2026-06-23-paddock-stand-gear-spin
+    - 2026-06-23-shift-lever-vs-clutch
   logs: []
 ---
 
 # Engine-on gear cycle + clutch revalidation — close gears 2–6 and re-test clutch with engine running
+
+> **Superseded 2026-06-23 — never ran.** Both sub-hypotheses closed engine-off via two unrelated sessions:
+>
+> - Gears 2–6 confirmed by [2026-06-23-paddock-stand-gear-spin](2026-06-23-paddock-stand-gear-spin.md): spinning the rear wheel by hand on a paddock stand walked the gearbox dogs into alignment for every gear, no engine needed. See [[signal-gear-position]] (now `confirmed`).
+> - Clutch found at `129` D0 bit 3 by [2026-06-23-shift-lever-vs-clutch](2026-06-23-shift-lever-vs-clutch.md): the original Phase A clutch-only null result was a switch-threshold issue (shallow pumps below the lever sensor's activation point), not a "clutch is not on the bus" finding. See [[signal-clutch]] (`confirmed`) and the bit 3 re-attribution note on [[signal-shift-failed]].
+>
+> The transient sentinel hunt is the only sub-hypothesis left and is now low priority — across the wide engine-off shift evidence we now have, no value outside `0x0–0x6` appeared in `129` D0 hi nibble. Fold into a future engine-on capture opportunistically rather than running a dedicated session.
+>
+> Plan preserved below for reference.
+
+---
 
 ## Hypothesis
 

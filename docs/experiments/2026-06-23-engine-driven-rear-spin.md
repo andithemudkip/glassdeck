@@ -1,6 +1,6 @@
 ---
 date: 2026-06-23
-status: planned
+status: success
 phase: 1
 related:
   findings:
@@ -12,7 +12,8 @@ related:
   experiments:
     - 2026-06-22-wheel-spin-paddock-stand
     - 2026-06-23-first-bike-roll
-  logs: []
+  logs:
+    - 2026-06-23-engine-driven-rear-spin
 ---
 
 # Engine-driven rear spin on paddock stand — steady-state speeds + scaling via RPM-anchored ground truth
@@ -117,6 +118,76 @@ If either high-byte jump fails to appear at the predicted setpoint, the correspo
 
 **Plan B (add 2nd gear) is not needed for this experiment** — 1st gear at 5500 RPM is already 30 km/h, well past the highest predicted byte ceiling. A 2nd-gear follow-up only becomes relevant if we want to chase wrap-around behaviour at much higher speeds, in which case the mobile rig + real road capture is the more honest evidence anyway.
 
+## Result
+
+Captured 2026-06-23 evening — 118 416 frames, 5 min 2 s, [`logs/2026-06-23-engine-driven-rear-spin`](../../logs/2026-06-23-engine-driven-rear-spin/). Procedure executed cleanly; rider held each setpoint for ~12 s with normal drift. Analysis: [`scripts/engine_driven_rear_spin.py`](../../scripts/engine_driven_rear_spin.py).
+
+### Per-setpoint table (8 s steady-state window starting 3 s into each hold)
+
+| Setpoint | RPM μ | predicted km/h | D2 μ (range) | D3 | D5 | D6 μ (range) | D5:D6 BE decoded km/h (÷16) |
+|----------|------:|---------------:|--------------:|---:|---:|--------------:|----------------------------:|
+| Phase A — idle in 1st | 1706 |  9.22 | 100.5 (0x4B..0x7D) | 0x00 | 0x00              | 161.8 (0x74..0xCD) | 10.11 |
+| B1 ~2000 RPM           | 1975 | 10.68 | 115.6 (0x5C..0x9F) | 0x00 | 0x00 (rare 0x01)  | 186.6 (0x00..0xFE) | 11.66 |
+| B2 ~2500 RPM           | 2131 | 11.52 | 124.1 (0x57..0xAF) | 0x00 | 0x00 (rare 0x01)  | 181.3 (0x00..0xFF) | 13.00 |
+| B3 ~3500 RPM           | 3017 | 16.31 | 171.6 (0x85..0xC3) | 0x00 | **0x01** emerges  |  60.4 (0x02..0xFF) | **18.18** |
+| B4 ~4500 RPM           | 3944 | 21.32 | 221.9 (0xCD..0xFA) | 0x00 | 0x01              | 121.1 (0x5B..0xA9) | 23.57 |
+| B5 ~5500 RPM           | 4966 | 26.85 | **wraps** (0x00..0xFF) | 0x00 | 0x01..**0x02**| 192.7 (0x00..0xFF) | **29.64** |
+| Phase C — idle in 1st  | 1698 |  9.18 | 100.5 (0x4D..0x81) | 0x00 | 0x00              | 161.8 (0x78..0xD4) | 10.11 |
+
+RPM held within ~140 RPM of target except B2 (rider held ~2130 vs 2500 target) — irrelevant since RPM is read frame-by-frame from `120`.
+
+### Linear regression — km/h = a·raw + b across all 7 setpoints
+
+| Decode candidate | Slope (km/h/LSB) | Intercept | RMS residual |
+|------------------|-----------------:|----------:|-------------:|
+| **D5:D6 BE**     | **0.05633**      | **+0.071** | **0.019**    |
+| D5:D6 LE         | -6e-5            | +17.3     | 6.29         |
+| D2 alone         | -0.0059          | +15.7     | 6.32 (wraps) |
+| D2:D3 LE         | -0.0059          | +15.7     | 6.32 (D3 = 0) |
+| D2:D3 BE         | -2e-5            | +15.7     | 6.32         |
+| D6 alone         | -0.0149          | +17.3     | 6.29 (wraps) |
+
+D5:D6 BE is the only candidate with a clean linear fit. Slope ~10% below the binary-friendly 0.0625 km/h/LSB — attributable to back-of-envelope gearing/tyre numbers, not the encoding (see [[signal-wheel-speed-rear]] § Open).
+
+### D6 / D2 ratio at no-wrap setpoints
+
+| Setpoint        | D2 μ | D6 μ | D6/D2 |
+|-----------------|-----:|-----:|------:|
+| Phase A idle    | 100.5 | 161.8 | **1.610** |
+| B1 ~2000 RPM    | 115.6 | 186.6 | **1.614** |
+| Phase C idle    | 100.5 | 161.8 | **1.609** |
+| (B2+ — D6 wrapping, ratio meaningless) | | | — |
+
+Ratio 1.610 matches predicted 16/10 = 1.6 (1/16 km/h ÷ 1/10 km/h) within noise.
+
+### Falsification outcomes vs Expected outcomes section
+
+| Prediction | Outcome |
+|------------|---------|
+| **D5 emerges as `0x01` at B3 (~16 km/h ceiling)** | **Confirmed.** Mostly 0x01 by B3, fully 0x01 by B4. |
+| **D3 emerges as `0x01` at B5 (~25.5 km/h ceiling)** | **Refuted.** D2 wrapped through full 0x00..0xFF at B5; D3 stayed at 0x00. D2:D3 is not a uint16. |
+| Filtered-vs-raw (D6/D2 → constant at steady-state) | Partial: ratio is constant in the no-wrap regime, but the constant matches the **scale ratio**, not a filter time-constant. |
+| Different-scaling-laws (D6/D2 stays speed-dependent) | Refuted — ratio is constant at 1.61 across no-wrap setpoints. |
+| ABS-vs-tone-ring (D6 stair-steps, D2 smooth) | Refuted — both bytes show similar per-frame noise envelopes, not the discrete-vs-smooth split that hypothesis predicted. |
+| ABS warning lamp trips, new always-on IDs appear | **Refuted on bus traffic.** Same 11 always-on IDs, identical to baseline ([[always-on-broadcast-ids]]). ABS lamp behaviour not separately observed in this analysis pass; if it tripped, it didn't manifest as new traffic. |
+
+## Interpretation
+
+**Three things settled, one prediction refuted, one open:**
+
+1. **D5:D6 is a big-endian uint16 carrying rear wheel speed at ~1/16 km/h per LSB.** Cleanest result of the session — single-candidate fit at three orders of magnitude tighter than any other decode. The exact LSB sits 10% below the binary-friendly 0.0625; almost certainly because the back-of-envelope KTM 390 gearing × 150/60ZR17 circumference numbers in this experiment doc are off by ~10%, not because the encoding is some non-binary unit. Resolves on (a) an authoritative gearing source, or (b) a low-speed road capture cross-checking against the OEM speedo ([[2026-06-23-first-bike-roll]]).
+
+2. **D2 is a coarse mirror of the same wheel speed at ~1/10 km/h per LSB**, uint8, with no companion high byte. D3 stayed at 0x00 throughout — including the moment D2 wrapped through 0x00..0xFF at B5 — so D2:D3 as a uint16 is cleanly out. D2 is genuinely just a single byte that wraps every 25.5 km/h. Quirky design choice (the dashboard never displays speed > 25.5 km/h from this byte, ever) but unambiguous from the data.
+
+3. **D2 vs D6 is the simplest possible relationship: same quantity, different scales.** Ratio 1.610 ± 0.003 at no-wrap setpoints matches 16/10 = 1.6 within frame-level noise. The three prior hypotheses (filtered-vs-raw, different scaling laws, ABS-estimate-vs-tone-ring) were all too clever — none survive. The decay-tail ratio difference observed in the 2026-06-22 hand-spin session was almost certainly small-denominator noise, not a real speed-dependent shape.
+
+**What this doesn't tell us:**
+
+- **Front-wheel byte location** stays open. D0..D1 was STATIC `0x00` throughout (rear-only spin) — consistent with the KTM cross-walk prediction, not a test of it. [[2026-06-23-first-bike-roll]] is the next move.
+- **Whether D4 carries anything** (STATIC `0x00` here too). Not motivated to chase.
+- **Exact OEM unit (0.0625 vs ~0.056)** awaits gearing reconciliation or an OEM-speedo cross-check at low speed.
+- **ABS warning lamp behaviour on the dash** wasn't recorded in the analysis. session.md still has TODOs.
+
 ## Expected outcomes
 
 - **D2 and D6 ramp smoothly with RPM, D2:D3 (or D5:D6) reads as a uint16 with one of the two predicted scalings** → promote [[signal-wheel-speed-rear]] from `provisional` to `confirmed` for the rear wheel; rewrite the "D3/D5 are padding" sub-section as "D3/D5 are high bytes, not yet exercised below ~25 / ~16 km/h"; rewrite "encoding open" as "uint16 LE, scale = X.X km/h per LSB."
@@ -129,9 +200,10 @@ If either high-byte jump fails to appear at the predicted setpoint, the correspo
 
 ## Follow-ups
 
-- Findings to write or update:
-  - [[signal-wheel-speed-rear]] — promote to `confirmed` for rear, fold in scaling and the D2/D6 resolution.
-  - Maybe a new finding `signal-vehicle-speed-rear-filtered` vs `signal-vehicle-speed-rear-raw` if D2 and D6 turn out to be filtered/raw of the same quantity.
-- Bike's official gearing — find authoritative source (service manual, factory spec sheet, or measure directly: lift rear, mark wheel + sprocket, count rotations through one engine cycle in known gear) and replace the back-of-envelope numbers above before publishing the analysis.
-- **Front-wheel attribution still open** — only [[2026-06-23-first-bike-roll]] (or a real motion capture) can resolve it. Run that one too; the two experiments are complementary, not redundant.
-- **Higher-speed regime** — if Plan A is clean and you want to chase the D3/D5 high-byte behaviour: schedule a 2nd-gear follow-up. Or wait for the mobile rig + a real road capture, which is more honest evidence anyway.
+- Findings updated:
+  - [[signal-wheel-speed-rear]] — **promoted to `confirmed`**. Rewritten: D5:D6 BE uint16 (~1/16 km/h) primary, D2 uint8 (~1/10 km/h) coarse mirror, D3 not a high byte (refuted). KTM cross-walk refined.
+- New analysis script: [`scripts/engine_driven_rear_spin.py`](../../scripts/engine_driven_rear_spin.py).
+- **Bike's official gearing** — pin the LSB to 0.0625 km/h (or whatever it actually is) by either (a) finding authoritative KTM 390 gearing + measured rolling circumference, or (b) cross-checking against the OEM speedo on a low-speed roll (the [[2026-06-23-first-bike-roll]] capture already covers this).
+- **Front-wheel attribution still open** — only [[2026-06-23-first-bike-roll]] (or a real motion capture) can resolve it. Two experiments stay complementary.
+- **No new ABS-fault traffic** — closes the "fault-state broadcast" angle for this session. If/when ABS lamp behaviour is reproduced, look for *bit-level* changes in existing IDs, not new IDs.
+- **Higher-speed regime** — D5:D6 BE doesn't wrap until ~256 km/h; D2 wraps every 25.5 km/h forever. No motivation for a 2nd-gear follow-up; mobile rig + road capture is the right next escalation.

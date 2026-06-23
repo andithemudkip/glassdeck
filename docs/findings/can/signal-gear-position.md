@@ -1,8 +1,9 @@
 ---
 area: can
-status: partial
+status: confirmed
 established_by:
   - 2026-06-18-gear-cycle-clutch
+  - 2026-06-23-paddock-stand-gear-spin
 references:
   - ktm-can-decoder
 ---
@@ -19,19 +20,19 @@ gear_nibble = (data[0] >> 4) & 0x0F
 |------|-------------:|:------|
 | N    | `0x0`        | **confirmed** |
 | 1    | `0x1`        | **confirmed** |
-| 2    | `0x2` *(hypothesised, KTM mapping)* | unverified |
-| 3    | `0x3` *(hypothesised)* | unverified |
-| 4    | `0x4` *(hypothesised)* | unverified |
-| 5    | `0x5` *(hypothesised)* | unverified |
-| 6    | `0x6` *(hypothesised)* | unverified |
+| 2    | `0x2`        | **confirmed** |
+| 3    | `0x3`        | **confirmed** |
+| 4    | `0x4`        | **confirmed** |
+| 5    | `0x5`        | **confirmed** |
+| 6    | `0x6`        | **confirmed** |
 
-The N=0 and 1=1 mappings were observed cleanly across all sampled windows of the Phase B gear-cycle capture (purity 100% in the held-N windows; purity ~90% in the 1st-gear window, the remainder explained by 1 s of shift-mechanics settling). Gears 2–6 were not reached: with the engine off on a paddock stand, the gearbox dogs do not align well enough to engage gears above 1st. The KTM-style `gear == integer` encoding is the standing hypothesis for 2–6 and the natural reading given how cleanly 0 and 1 fall out.
+N and 1 were established by the Phase B engine-off gear-cycle capture (purity 100% in held-N windows, ~90% in the 1st-gear window). Gears 2–6 were not reached in Phase B because, engine-off on a paddock stand, the gearbox dogs do not align without the input shaft turning. The wheel-spin paddock-stand session ([2026-06-23-paddock-stand-gear-spin](../../experiments/2026-06-23-paddock-stand-gear-spin.md)) worked around this: spinning the rear wheel by hand walked the dogs into alignment for every gear in sequence, and each gear rendered correctly in the live view (which decodes `129` D0 hi nibble directly). Clean linear ramp `0,1,2,3,4,5,6` confirms the KTM mapping for all 7 values.
 
-The low nibble of `129` D0 stayed `0x0` in every observed *held-gear* window — but follow-up alignment of the Phase B trace ([[signal-shift-lever]]) shows the lo nibble carries **shift-lever sensor** state, not gear state: bit 3 = lever displaced from rest (sustained), bit 1 = shift attempt failed to engage target gear (transient). The dashboard `-` glyph discussed below is most likely sourced from bit 1, not from a separate sensor as previously hypothesised.
+The low nibble of `129` D0 carries other signals — see [[signal-clutch]] (bit 3) and [[signal-shift-failed]] (bit 1).
 
 ## What the dash "-" means
 
-When the bike physically cannot resolve a gear (e.g., a shift-lever push that didn't actually engage a gear), the dash shows `-`. On the CAN bus, `129` D0 **hi** nibble reads `0x0` (neutral) during these "-" episodes — the gear field itself has no transition / unknown sentinel value. But the **lo** nibble does carry a failed-shift flag — see [[signal-shift-lever]] for bit 1's signature, which fires shortly after the failed N→2 attempts in Phase B. The dashboard MVP can almost certainly mirror the OEM `-` by watching `129` D0 bit 1 directly, with no separate sensor required. Needs engine-on confirmation.
+When the bike physically cannot resolve a gear (e.g., a shift-lever push that didn't actually engage a gear), the dash shows `-`. On the CAN bus, `129` D0 **hi** nibble reads `0x0` (neutral) during these "-" episodes — the gear field itself has no transition / unknown sentinel value. But the **lo** nibble does carry a failed-shift flag — see [[signal-shift-failed]] for bit 1's signature, which fires shortly after the failed N→2 attempts in Phase B. The dashboard MVP can almost certainly mirror the OEM `-` by watching `129` D0 bit 1 directly, with no separate sensor required.
 
 ## Cross-walk vs KTM
 
@@ -44,15 +45,14 @@ The `540` D3 hi nibble was LOW-CARD(4) in the idle baseline but stayed at `0x1` 
 
 ## Evidence
 
-- [`docs/experiments/2026-06-18-gear-cycle-clutch.md`](../../experiments/2026-06-18-gear-cycle-clutch.md) — Phase B Result section.
-- [`logs/2026-06-19-gear-cycle-clutch-B-gear-cycle/`](../../../logs/2026-06-19-gear-cycle-clutch-B-gear-cycle/) — raw capture.
-- [`scripts/gear_scan.py`](../../../scripts/gear_scan.py) — per-window nibble tabulation that surfaced the mapping.
+- [`docs/experiments/2026-06-18-gear-cycle-clutch.md`](../../experiments/2026-06-18-gear-cycle-clutch.md) — Phase B Result section (N and 1).
+- [`docs/experiments/2026-06-23-paddock-stand-gear-spin.md`](../../experiments/2026-06-23-paddock-stand-gear-spin.md) — wheel-spin engagement reached gears 2–6 engine-off (live-view observation, no log).
+- [`logs/2026-06-19-gear-cycle-clutch-B-gear-cycle/`](../../../logs/2026-06-19-gear-cycle-clutch-B-gear-cycle/) — raw capture for the N/1 evidence.
+- [`scripts/gear_scan.py`](../../../scripts/gear_scan.py) — per-window nibble tabulation that surfaced the original N/1 mapping.
 
 ## Open
 
-- **Confirm gears 2–6.** Requires engine running so the input shaft is turning and the dogs align. Bundle into the engine-on stationary experiment, or a brief first-motion test.
-- **Confirm there is no transition sentinel.** The current evidence is "didn't see one in our 2nd-engagement attempts," but full 1↔2 shifts under power may surface a brief intermediate value during the shift itself.
+- **Transition sentinel.** No value other than `0x0–0x6` was observed in any held-gear window, including across the slow hand-driven shifts of the wheel-spin session. A rapid engine-on shift might still surface a sub-frame intermediate value (`0xF` or similar), but the evidence base is now wide enough that "no transition sentinel exists on this bus" is the favoured reading. Demoted in priority — fold in if a future engine-on capture happens to span shifts.
 - **What drives `540` D3 hi nibble's idle-time cardinality of 4?** Static in Phase B → not gear. Test under mode toggle and warm-up sweeps.
-- **Where does the dash get the `-` state from?** Almost certainly a shift-lever-position input on a separate bus. Out of scope for the dashboard MVP unless we decide we need to mirror it exactly.
 
-See also: [[always-on-broadcast-ids]], [[ktm-can-decoder]].
+See also: [[signal-clutch]], [[signal-shift-failed]], [[always-on-broadcast-ids]], [[ktm-can-decoder]].
