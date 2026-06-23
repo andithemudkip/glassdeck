@@ -43,7 +43,11 @@ The session structure matters: each input is bracketed by a held window with no 
 
 ## Procedure
 
-1. Start capture: `python scripts/capture.py --port /dev/cu.usbmodem101 --label engine-on-stationary-inputs`.
+> **Scripted** — driven by [`2026-06-18-engine-on-stationary-inputs.procedure.yaml`](2026-06-18-engine-on-stationary-inputs.procedure.yaml) (ADR 0006). Run with `--experiment` and the operator screen handles step ordering, durations, and the per-phase marks automatically; the rider just follows the prompts.
+>
+> **Timing convention shift from the original prose plan:** auto-marks fire at **step start** (the moment the rider is cued to begin the action — start of SET-hold, start of throttle blip), NOT at the dash's visual confirmation. The bus broadcast is keyed off the press edge, not the dash redraw, so this is the correct reference for window analysis. The narrative below describes intent; the YAML is the source of truth for what actually runs.
+
+1. Start capture: `python scripts/capture.py --port /dev/cu.usbmodem101 --label engine-on-stationary-inputs --experiment docs/experiments/2026-06-18-engine-on-stationary-inputs.procedure.yaml`.
 2. 5 s key-off baseline.
 3. Key on, **space**. 30 s settling.
 4. Press starter (**`s`**). Let engine catch. **`e`** when idle is stable. Hold 30 s of clean idle (idle-baseline replica window — useful to subtract from later phases).

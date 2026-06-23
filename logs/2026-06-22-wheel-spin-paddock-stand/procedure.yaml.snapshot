@@ -1,0 +1,102 @@
+name: wheel-spin-paddock-stand
+description: >
+  Rear (and optionally front) wheel spin on a paddock stand, engine off.
+  Many short hand-pushes — each ~1 s of motion followed by a quick coast.
+  Hunt for wheel-speed bytes and the auto-headlight threshold bit by
+  varying push intensity across below-threshold and above-threshold pushes.
+experiment: 2026-06-22-wheel-spin-paddock-stand
+
+# Timing convention: auto-marks fire at STEP START — the moment the
+# rider is cued to push. Each push is short (~1 s motion + ~1 s coast),
+# so step durations are tight — long enough to push, observe, mark
+# headlight transitions, and let the wheel come to rest.
+#
+# Headlight ON/OFF transitions are NOT predictable in time, so the
+# rider presses `b` (high-beam-toggle hotkey, repurposed here as
+# "headlight event") manually when they see the low beam change state.
+#
+# Many reps per phase (instead of fewer long spins) — each push is a
+# discrete trial, so reps give statistical power on threshold values.
+
+steps:
+  # ---------------------------------------------------------------- Setup
+  - prompt: "Key OFF, kill RUN, neutral, bike on rear paddock stand. Hands off. Recording bus silence."
+    duration_secs: 6
+
+  - prompt: "Turn key ON now. Confirm low beam is OFF (engine off, no motion)."
+    duration_secs: 30
+    countdown_from: 3
+    mark: { key: mark, label: "key on" }
+
+  # -------------------------------------- Phase A — REAR gentle pushes (sub-threshold)
+  - prompt: >
+      PHASE A — REAR gentle pushes. One short, gentle push per step.
+      Should stay BELOW the auto-headlight threshold — low beam should
+      NOT come on. If it does come on, you pushed too hard for this
+      phase, no big deal, still useful data, just press `b` and carry on.
+    duration_secs: 8
+
+  - repeat: 6
+    steps:
+      - prompt: "Gentle push REAR (one short flick). Let it coast to stop."
+        duration_secs: 6
+        countdown_from: 3
+        mark: { key: spin, label: "REAR gentle push {iter} of {loop_count}" }
+
+  - prompt: "Rest — wheel fully stopped, hands off, low beam confirmed OFF."
+    duration_secs: 8
+
+  # -------------------------------------- Phase B — REAR hard pushes (above threshold)
+  - prompt: >
+      PHASE B — REAR hard pushes. One firm push per step — hard enough
+      to definitely trip the auto-headlight. Press `b` the moment the
+      low beam turns ON, then `b` again when it turns OFF as the wheel
+      slows. Coast is short (~1 s), so the OFF mark comes quickly.
+    duration_secs: 10
+
+  - repeat: 8
+    steps:
+      - prompt: "Hard push REAR. Press `b` on headlight ON, `b` again on headlight OFF."
+        duration_secs: 7
+        countdown_from: 3
+        mark: { key: spin, label: "REAR hard push {iter} of {loop_count}" }
+
+  - prompt: "Rest — wheel fully stopped, low beam OFF, hands off."
+    duration_secs: 8
+
+  # -------------------------------------- Phase C — FRONT wheel (optional)
+  - prompt: >
+      PHASE C — FRONT wheel, OPTIONAL. Only if you have a front stand
+      or a way to lift the front wheel cleanly. Otherwise press `q`
+      now to end the capture — the rear data alone is enough.
+    duration_secs: 15
+
+  - prompt: "FRONT wheel lifted? If not, `q` now. If yes, hands off — 10 s settle."
+    duration_secs: 10
+
+  - repeat: 3
+    steps:
+      - prompt: "Gentle push FRONT. Let it coast to stop."
+        duration_secs: 6
+        countdown_from: 3
+        mark: { key: spin, label: "FRONT gentle push {iter} of {loop_count}" }
+
+  - prompt: "Rest — wheel fully stopped, hands off."
+    duration_secs: 8
+
+  - repeat: 5
+    steps:
+      - prompt: "Hard push FRONT. Press `b` on headlight ON, `b` again on headlight OFF."
+        duration_secs: 7
+        countdown_from: 3
+        mark: { key: spin, label: "FRONT hard push {iter} of {loop_count}" }
+
+  - prompt: "Rest — wheel fully stopped, low beam OFF, hands off."
+    duration_secs: 8
+
+  # ----------------------------------------------------------- Shutdown
+  - prompt: "Key OFF. Hold 3 s of tail silence."
+    duration_secs: 6
+
+  - prompt: "Done. Press q to stop capture and fill in session.md."
+    duration_secs: null

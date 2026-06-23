@@ -85,7 +85,7 @@ def main() -> int:
           f"  ({'no-timing' if args.no_timing else f'{args.speed:.1f}× real-time'}"
           f"{', looping' if args.loop else ''})", flush=True)
     print(f"now run, in another terminal:", flush=True)
-    print(f"  python scripts/capture.py --live --port {slave_name} --label replay-test\n",
+    print(f"  python scripts/capture.py --live --port {slave_name} --watch\n",
           flush=True)
 
     try:

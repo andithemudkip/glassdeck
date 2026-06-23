@@ -72,9 +72,9 @@ LEGEND = """
   (any other key: recorded raw, label it later in session.md)
 
   -- ADR 0010 (live-view only) --
-  Ctrl-1..5  collapse / expand pane (top→bottom)
-  Ctrl-↑↓    z-threshold ±0.5   Alt-↑↓  activity ratio ±0.5
-  Ctrl-D     toggle D7          Ctrl-Y  toggle suppressed
+  F1..F5     collapse / expand pane (top→bottom)
+  F6 / F7    z-threshold +0.5 / -0.5    Shift-←→  activity ratio ±0.5
+  Ctrl-D     toggle D7                  Ctrl-Y    toggle suppressed
   Ctrl-N     capture hypothesis from active byte / continuous bit
 """
 
@@ -362,9 +362,19 @@ def main() -> int:
     parser.add_argument(
         "--byte-activity-hysteresis-secs",
         type=float,
-        default=3.0,
-        help="How long a byte must stay quiet before leaving the "
-             "active-unknown-bytes pane, preventing edge flicker (ADR 0008).",
+        default=5.0,
+        help="HOT-tier extension past active_now in the active-unknown-bytes "
+             "pane (ADR 0012 — was ADR 0008's exit grace; now the boundary "
+             "between bright and [dim] tiers inside the retention window).",
+    )
+    parser.add_argument(
+        "--byte-activity-retention-secs",
+        type=float,
+        default=30.0,
+        help="Total time a byte stays visible in the active-unknown-bytes "
+             "pane after activity ends (ADR 0012). The first hysteresis_secs "
+             "of that window are HOT (default brightness, frozen sparkline "
+             "preserving peak shape); the remainder is DIM.",
     )
     parser.add_argument(
         "--experiment",
@@ -575,6 +585,7 @@ def main() -> int:
                 byte_activity_window_secs=args.byte_activity_window_secs,
                 byte_activity_ratio=args.byte_activity_ratio,
                 byte_activity_hysteresis_secs=args.byte_activity_hysteresis_secs,
+                byte_activity_retention_secs=args.byte_activity_retention_secs,
             )
 
             worker = threading.Thread(

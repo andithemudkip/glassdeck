@@ -32,7 +32,7 @@ All commands below assume the venv is active (`python …`); if you'd rather not
 
 ## Running a capture
 
-See **[`CAPTURING.md`](CAPTURING.md)** for the operator's guide — quick start, scenario recipes ("see what flips when I press X"), hotkey reference, live-view panes, and troubleshooting.
+See **[`docs/guides/capturing.md`](../docs/guides/capturing.md)** for the operator's guide — quick start, scenario recipes ("see what flips when I press X"), hotkey reference, live-view panes, and troubleshooting.
 
 The short version:
 

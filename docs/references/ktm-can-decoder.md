@@ -11,12 +11,12 @@ The KTM 690 Enduro R uses the same Bosch ECU family as the 2020 Husqvarna Svartp
 | `120`  | 20 ms    | ✅ Yes                     | ✅ ~19.4 ms   |
 | `129`  | 20 ms    | ✅ Yes                     | ✅ ~19.4 ms   |
 | `12A`  | 50 ms    | ✅ Yes                     | ✅ ~50.2 ms   |
-| `12B`  | 10 ms    | ❌ Not present             | —             |
-| `290`  | 10 ms    | ❌ Not present             | —             |
+| `12B`  | 10 ms    | ❌ Not present              | —             |
+| `290`  | 10 ms    | ❌ Not present              | —             |
 | `450`  | 50 ms    | ✅ Yes                     | ✅ ~49.9 ms   |
 | `540`  | 100 ms   | ✅ Yes                     | ✅ ~99.6 ms   |
 
-The two missing IDs (`12B` wheel speeds / lean / tilt, `290` front brake pressure) are likely chassis-electronics IDs that the Husqvarna's simpler ABS module doesn't emit on the diagnostic stub — they may exist on a different bus segment, or simply not be present on this platform.
+KTM's `12B` ID itself is **not present** on the Husqvarna bus, but wheel-speed data lives on Husqvarna's `12D` instead (also 10 ms — see [[signal-wheel-speed-rear]]). KTM's `290` (front brake pressure) has no Husqvarna analog identified yet — possibly chassis-electronics that this bike's simpler ABS module doesn't emit on the diagnostic stub.
 
 ## Signal mappings — apply, don't trust
 
@@ -32,6 +32,8 @@ The ktm-can decoder is a **hypothesis source**, not a drop-in decoder for the Sv
 | Coolant temp | `540` D6,D7    | **`540` D5,D6 (shifted -1 byte)** | Big-endian uint16, divide by 10 → °C | [[signal-coolant-temp]] |
 | Kill switch  | `120` D3 bit 4 | **`541` D2 bit 4 (different ID)** | 1 = run, 0 = stop (polarity matches KTM) | [[signal-kill-switch]] |
 | Side stand   | `540` D4 bit 0 | **`540` D3 bit 0 (shifted -1 byte)** | 1 = up, 0 = down (polarity matches KTM) | [[signal-side-stand]] |
+| Rear wheel speed | `12B` D2..D3 (uint16 BE) | **`12D` D2 (high byte; D3 static — single-byte resolution)** | Same byte position as KTM's high byte; LSB stays 0 at hand-spin speeds; units TBD | [[signal-wheel-speed-rear]] |
+| Rear wheel speed (extra) | (n/a — KTM uses D6 for lean) | **`12D` D6 (Husqvarna-only)** | Husq repurposes D5..D7 from KTM's lean/tilt; D6 is a wheel-derived signal, D7 = universal cycle, D5 = padding | [[signal-wheel-speed-rear]] |
 
 ### Hypotheses to test in future per-input captures
 
@@ -39,6 +41,7 @@ Listed in priority order — easiest to test first, all engine-off where possibl
 
 | Signal                       | KTM location           | Test (suggested capture)                                  |
 |------------------------------|------------------------|-----------------------------------------------------------|
+| **Front wheel speed**        | `12B` D0..D1 (uint16 BE) | **Predicted at `12D` D0..D1** by analogy with rear (D2..D3 match KTM). Test on front-only spin or real motion capture; D0..D1 currently STATIC `0x00` in rear-only data |
 | Clutch switch                | `129` D0 bit 3         | Engine-off scan refuted; revalidate engine-on              |
 | Throttle open/closed flag    | `12A` D0 bit 1         | Refuted engine-off ([[signal-throttle-position]]); revalidate engine-on |
 | Throttle map (actual)        | `120` D4 bit 0         | Cycle ROAD/SUPERMOTO map switch                           |
@@ -67,6 +70,7 @@ Bosch ECUs for KTM/Husqvarna platforms ~2020 era share the message scheduler (so
 
 - **`540` byte layout is shifted one byte earlier on Husqvarna.** Coolant temp (KTM D6,D7 → Husq D5,D6) and side stand (KTM D4 bit 0 → Husq D3 bit 0) both moved by exactly -1. Worth using as a starting hypothesis when probing the next `540` signal.
 - **Polarity preservation.** Every Husqvarna signal verified against a KTM hypothesis so far has preserved KTM's polarity (engine RPM, throttle position, gear, coolant temp, kill switch, side stand). No inverted-polarity case has surfaced yet — but the kill-switch case (location moved to a different ID entirely) shows that "polarity preserved" doesn't imply "byte position preserved".
+- **ID relocation is common.** Two Husqvarna signals now sit on a different ID than KTM: kill switch (KTM `120` → Husq `541`) and wheel speed (KTM `12B` → Husq `12D`). The receiving period matches in both cases (so the broadcast scheduler still knows the right slot), but the ID number itself changes. Treat the KTM ID as a starting hypothesis, but always scan adjacent IDs in the same period cohort.
 
 ## Citation
 

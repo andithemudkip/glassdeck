@@ -1,7 +1,7 @@
 # 0008 — Live view: byte-level activity discovery
 
 **Date:** 2026-06-22
-**Status:** Draft
+**Status:** Accepted
 
 ## Context
 

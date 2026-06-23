@@ -1,7 +1,7 @@
 # 0010 — Live view: operator agency on the discovery surface
 
 **Date:** 2026-06-22
-**Status:** Draft
+**Status:** Accepted
 
 ## Context
 
@@ -21,25 +21,25 @@ Three changes, ordered by how load-bearing each is.
 
 ### 1. Collapsible panes
 
-Every analysis-screen pane gets a one-line collapsed state showing only its header and a brief content summary (e.g. `Active unknown bytes  [3 rows]` or `Decoded signals  [12 named, 2 stale]`). Default state is **all expanded** — no startup surprise. Hotkey `Ctrl+1` … `Ctrl+7` toggles pane 1 through 7 from top to bottom; the status pane is always visible and not in the cycle. Collapsed state is session-local (not persisted to disk — the operator will re-collapse on the next launch and that's fine).
+Every analysis-screen pane gets a one-line collapsed state showing only its header and a brief content summary (e.g. `Active unknown bytes  [3 rows]` or `Decoded signals  [12 named, 2 stale]`). Default state is **all expanded** — no startup surprise. Hotkey `F1` … `F5` toggles pane 1 through 5 from top to bottom; the status pane is always visible and not in the cycle. Collapsed state is session-local (not persisted to disk — the operator will re-collapse on the next launch and that's fine).
 
 Implementation is a CSS height toggle plus a per-pane bool on the `AnalysisScreen` instance. The pane's render method already exists; collapsed mode just renders the header line.
 
 Why explicit (operator-driven) and not implicit (auto-collapse on empty): a procedure-driven ride is exactly when panes go from "empty" to "spiking" and back. Auto-collapse would yank vertical real estate around mid-ride. Stable layout > efficient layout.
 
-Why `Ctrl+digit` and not a "panes" overlay modal: zero-friction. The operator's already looking at the pane; one chord and it folds. A modal would be discoverable but slower for the everyday case.
+Why a single keystroke and not a "panes" overlay modal: zero-friction. The operator's already looking at the pane; one key and it folds. A modal would be discoverable but slower for the everyday case. (Initial draft used `Ctrl+1..5`; Mac terminals don't deliver a distinct sequence for Ctrl+digit so the digit fell through to capture.py's printable-char mark fallback. `F1..F5` is the only modifier-free, non-printable namespace with five contiguous keys.)
 
 ### 2. Hot-tunable thresholds
 
 Two of the eight CLI flags are tuned constantly across sessions in practice — `--anomaly-z-threshold` and `--byte-activity-ratio`. They are the multiplicative gates on the two discovery panes; the operator dials them as they learn the noise floor of the current bus. Make them in-session adjustable:
 
-- `Ctrl+↑` / `Ctrl+↓` — bit-flip `z_threshold` by ±0.5 (clamped to ≥ 0.5)
-- `Alt+↑` / `Alt+↓` — byte-activity `ratio` by ±0.5 (clamped to ≥ 0.5)
+- `F6` / `F7` — bit-flip `z_threshold` by ±0.5 (clamped to ≥ 0.5)
+- `Shift+→` / `Shift+←` — byte-activity `ratio` by ±0.5 (clamped to ≥ 0.5)
 
 Current values render in the status pane:
 
 ```
-[Status]  …  z=3.0  ratio=3.0×  (Ctrl-↑↓ z, Alt-↑↓ ratio, Ctrl-D D7, Ctrl-Y suppressed)
+[Status]  …  z=3.0  ratio=3.0×  (F6/F7 z, Shift-←→ ratio, Ctrl-D D7, Ctrl-Y suppressed)
 ```
 
 Two binary toggles join them since they share the "currently filtering the pane" character:
@@ -53,7 +53,7 @@ We considered a settings modal (`s` opens an overlay with arrow-key controls). R
 
 We considered making more flags hot-tunable (warmup-flips, retention, window-secs, hysteresis-secs). Rejected for now: they're structural, not dial-knobs. Operators tune them once per project, not per session. If experience shows otherwise, add more keybindings — the framework will already be in place.
 
-Constraint that drove keybinding choice: every printable character is reserved for mark hotkeys (`capture.py` HOTKEYS). Modifier+arrow combinations are the only safe namespace.
+Constraint that drove keybinding choice: every printable character is reserved for mark hotkeys (`capture.py` HOTKEYS). Non-printable keys (function keys, modifier+arrow) are the only safe namespace — and on Mac the safe subset is narrower than it looks: Ctrl+digit collapses to the bare digit, Ctrl+arrow is hijacked by Mission Control, Alt+arrow doesn't send an escape in Terminal.app, and Shift+↑↓ is swallowed for text selection (though Shift+←→ passes through).
 
 ### 3. Hypothesis capture from a pane row
 
@@ -93,6 +93,6 @@ We considered adding row-focus navigation (arrow keys to select a row in the act
 - **Hypothesis files are a new artifact under `logs/`.** They sit alongside `session.md` / `events.csv` / `live_decode.csv` as part of the session record. They're append-only during a session; never modified after the session closes (same discipline as raw captures). A new `scripts/promote_hypothesis.py` (out of scope here) would later be the path from `hypotheses.yaml` → `signals.yaml`, gated by an experiment.
 - **One more file in the session dir to describe.** The `session.md` template will gain a "Hypotheses captured" section. Trivial.
 - **Status pane grows by one line.** From three lines to four. Acceptable given collapsibility is now an option for everything else.
-- **Keybinding budget is now tight.** `Ctrl+digit` × 5 (the layout has five collapsible panes top-to-bottom; the side-by-side bit panes share one slot), `Ctrl+/Alt+↑↓` × 4, `Ctrl+D`, `Ctrl+Y`, `Ctrl+N`, plus the existing `?`, `.`, `w`, `u`, `Tab`, `Space`, `Left`, marks. The legend pane (`?`) needs updating; beyond that the only constraint is "printable chars are marks." Future keys must keep using modifiers or fold into modals.
+- **Keybinding budget is now tight.** `F1..F5` × 5 (the layout has five collapsible panes top-to-bottom; the side-by-side bit panes share one slot), `F6`/`F7` for z, `Shift+←→` for ratio, `Ctrl+D`, `Ctrl+Y`, `Ctrl+N`, plus the existing `?`, `.`, `w`, `u`, `Tab`, `Space`, `Left`, marks. The legend pane (`?`) needs updating; beyond that the only constraint is "printable chars are marks." Future keys must keep using function keys / modifier+arrow or fold into modals.
 - **Scope discipline.** This ADR is in-session interaction with the existing discovery surface. It is not a redesigned decoder, not a `signals.yaml` editor, not a hypothesis-promotion pipeline, not a non-modal HUD framework. Each of those is its own decision if pressure exists.
 - **Implementation touch points.** `scripts/live_view/app.py` gains keybindings, status-line rendering of current tunables, a `_capture_hypothesis` action, and an `is_collapsed: dict[str, bool]` on `AnalysisScreen`. `scripts/live_view/modals.py` gains a `HypothesisModal`. `scripts/live_view/screens.py` CSS gets a collapsed variant per pane. `capture.py` gains nothing — the CLI surface is unchanged; the new flags would be regressions. `docs/signals/signals.yaml` is untouched.

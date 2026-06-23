@@ -22,7 +22,11 @@ from .bridge import LiveBridge
 from .constants import (
     ACTIVE_BYTES_PANE_ROWS,
     ACTIVITY_EWMA_ALPHA,
+    ANOMALY_ACCENT_COLORS,
+    ANOMALY_COOCCUR_SECS,
     BASELINE_FLOOR,
+    BYTE_ACTIVITY_RETENTION_SECS,
+    BYTE_ACTIVITY_SAMPLE_SECS,
     DECODED_REFRESH_HZ,
     DISCOVERY_PANE_ROWS,
     EWMA_ALPHA,
@@ -30,6 +34,7 @@ from .constants import (
     FRAME_DRAIN_HZ,
     PROCEDURE_TICK_HZ,
     SIGMA_FLOOR,
+    SPARKLINE_WIDTH,
     STALE_AFTER_SECS,
 )
 from .modals import (
@@ -47,9 +52,13 @@ from .state import (
     ByteActivityStats,
     GroupedRow,
     WatchPin,
+    _render_anomaly_row,
+    _render_byte_row,
     _render_group_row,
     _signed_secs,
     classify_byte,
+    is_halo_active,
+    is_hot,
     sparkline,
 )
 
@@ -64,12 +73,17 @@ class LiveView(App):
         Binding("tab", "toggle_screen", "switch", show=False, priority=True),
         Binding("space", "toggle_pause", "pause", show=False, priority=True),
         Binding("left", "prev_step", "prev", show=False, priority=True),
-        # ADR 0010 §2 — hot-tunable thresholds. Modifier+arrow because
-        # every printable char is reserved for mark hotkeys (capture.py).
-        Binding("ctrl+up", "bump_z(0.5)", show=False, priority=True),
-        Binding("ctrl+down", "bump_z(-0.5)", show=False, priority=True),
-        Binding("alt+up", "bump_ratio(0.5)", show=False, priority=True),
-        Binding("alt+down", "bump_ratio(-0.5)", show=False, priority=True),
+        # ADR 0010 §2 — hot-tunable thresholds. Every printable char is
+        # reserved for mark hotkeys (capture.py), so we use non-printable
+        # keys. Mac-terminal constraints push the specific choices:
+        #   - Ctrl+arrow is captured by macOS Mission Control.
+        #   - Alt+arrow doesn't send an escape in Terminal.app.
+        #   - Shift+↑↓ is swallowed by Terminal.app (text selection),
+        #     though Shift+←→ passes through — hence the asymmetric pair.
+        Binding("f6", "bump_z(0.5)", show=False, priority=True),
+        Binding("f7", "bump_z(-0.5)", show=False, priority=True),
+        Binding("shift+right", "bump_ratio(0.5)", show=False, priority=True),
+        Binding("shift+left", "bump_ratio(-0.5)", show=False, priority=True),
         Binding("ctrl+d", "toggle_d7", show=False, priority=True),
         Binding("ctrl+y", "toggle_suppressed", show=False, priority=True),
     ]
@@ -92,7 +106,8 @@ class LiveView(App):
         show_suppressed: bool = False,
         byte_activity_window_secs: float = 2.0,
         byte_activity_ratio: float = 3.0,
-        byte_activity_hysteresis_secs: float = 3.0,
+        byte_activity_hysteresis_secs: float = 5.0,
+        byte_activity_retention_secs: float = BYTE_ACTIVITY_RETENTION_SECS,
     ) -> None:
         # session_dir=None is the --watch path: render-only, no disk writes.
         super().__init__()
@@ -147,9 +162,13 @@ class LiveView(App):
         self.watch_pins: list[WatchPin] = []
 
         # ADR 0008 — per-byte rolling range + EWMA baseline.
+        # ADR 0012 — `hysteresis_secs` now means "HOT-tier extension past
+        # active_now" (was: total exit grace); `retention_secs` is the new
+        # total visible window, with `[dim]` decay between the two.
         self.byte_activity_window_secs = byte_activity_window_secs
         self.byte_activity_ratio = byte_activity_ratio
         self.byte_activity_hysteresis_secs = byte_activity_hysteresis_secs
+        self.byte_activity_retention_secs = byte_activity_retention_secs
         self.byte_activity: dict[tuple[int, int], ByteActivityStats] = {}
 
         self.snapshot_seq = 0
@@ -164,6 +183,10 @@ class LiveView(App):
         self.step_started_at: float | None = None
         self.paused = False
         self._pause_started_at: float | None = None
+        # Most recent mark for the OperatorScreen's confirmation flash —
+        # (monotonic_ts, key, label). Read by the screen each refresh; it
+        # fades the flash itself by comparing against `time.monotonic()`.
+        self._last_mark: tuple[float, str, str] | None = None
 
         # live_decode.csv — long format so per-row content is uniform
         # regardless of which signal a frame fed. In --watch mode there's
@@ -428,6 +451,7 @@ class LiveView(App):
         ts = time.time()
         self.events_log.log(key, label)
         self._open_flip_window(label or key, ts)
+        self._last_mark = (time.monotonic(), key, label)
 
     def _open_flip_window(self, label: str, ts: float) -> None:
         self.baseline_bytes = dict(self.current_bytes)
@@ -822,11 +846,14 @@ class LiveView(App):
                 BASELINE_FLOOR, self.byte_activity_ratio * stats.baseline_range_ewma
             )
             active_now = short_range > threshold
-            in_tail = (
+            # ADR 0012 — visibility window is now retention_secs (was
+            # hysteresis_secs). Hysteresis is the HOT/DIM boundary inside
+            # that window, not the exit gate.
+            in_window = (
                 stats.last_active_ts is not None
-                and now - stats.last_active_ts < self.byte_activity_hysteresis_secs
+                and now - stats.last_active_ts < self.byte_activity_retention_secs
             )
-            if active_now or in_tail:
+            if active_now or in_window:
                 rows += 1
         return (
             f"[bold]Active unknown bytes[/bold]  "
@@ -878,7 +905,15 @@ class LiveView(App):
         """ADR 0008 — append (ts, val) to the per-byte ring buffer, evict
         old entries past the window, refresh short_range + the long EWMA
         baseline, and timestamp the byte as active if it currently trips
-        the threshold (consumed by the pane's hysteresis check)."""
+        the threshold (consumed by the pane's hysteresis check).
+
+        ADR 0012 — also drive the separate display buffer (~4 Hz sample
+        cadence, fixed length, decoupled from the detection window) and
+        track peak ratio + peak timestamp for the persistent annotation
+        on the redesigned Active unknown bytes pane. The buffers split
+        so the sparkline keeps showing the byte's shape during the
+        decay tail instead of washing out as the detection window
+        slides past."""
         stats = self.byte_activity.get((arb, byte))
         if stats is None:
             stats = ByteActivityStats()
@@ -888,6 +923,12 @@ class LiveView(App):
         window = self.byte_activity_window_secs
         while buf and ts - buf[0][0] > window:
             buf.popleft()
+
+        # ADR 0012 — display buffer at ~4 Hz, independent of broadcast rate.
+        if ts - stats.last_display_sample_ts >= BYTE_ACTIVITY_SAMPLE_SECS:
+            stats.display_buffer.append(float(val))
+            stats.last_display_sample_ts = ts
+
         if len(buf) < 2:
             return
         lo = min(v for _, v in buf)
@@ -899,6 +940,22 @@ class LiveView(App):
         threshold = max(BASELINE_FLOOR, self.byte_activity_ratio * stats.baseline_range_ewma)
         if short_range > threshold:
             stats.last_active_ts = ts
+            # ADR 0012 — track peak ratio across the current activity
+            # episode. ∞ wins (first-activity case); otherwise the
+            # arithmetic ratio. Reset back at retention boundary in the
+            # render loop.
+            if stats.baseline_range_ewma <= BASELINE_FLOOR:
+                cur_ratio = math.inf
+            else:
+                cur_ratio = short_range / stats.baseline_range_ewma
+            # math.inf > finite > 0; cur_ratio either replaces or matches.
+            if cur_ratio > stats.peak_ratio or stats.peak_ratio_ts is None:
+                stats.peak_ratio = cur_ratio
+                stats.peak_ratio_ts = ts
+            # Activity resumed — drop any frozen-tail snapshot so the
+            # sparkline goes live again.
+            if stats.frozen_buffer:
+                stats.frozen_buffer = []
 
     def _flip_rows(self) -> list[tuple[int, int, int, str, int, float, str, float]]:
         """Per-bit flip rows used by the unknown pane and snapshot JSON."""
@@ -921,18 +978,34 @@ class LiveView(App):
     def _group_rows_by_arb(
         self,
         rows: Iterable[tuple[int, int, int, str, float, float, float, float]],
+        *,
+        bucket_window: tuple[float, float] | None = None,
+        bucket_count: int = SPARKLINE_WIDTH,
     ) -> list[GroupedRow]:
         """Group per-bit anomaly rows by arbitration ID (ADR 0007 #5).
 
         Row tuple: (arb, byte, bit, transition, event_ts, z, mu, sigma).
         `event_ts` is latency-from-mark for the mark-driven pane, or
         wall-clock for the continuous discovery pane — opaque to the
-        grouper. `z=math.inf` marks a warmup-tier event."""
+        grouper. `z=math.inf` marks a warmup-tier event.
+
+        ADR 0011 — when `bucket_window=(start_ts, end_ts)` is passed,
+        every group also gets a `bucket_timeline` of `bucket_count`
+        anomaly counts spanning that wall-clock window (used by the
+        live anomalies pane's per-row activity sparkline). The
+        grouper is opaque to whether `event_ts` is wall-clock or
+        latency-from-mark; the caller is responsible for only passing
+        a `bucket_window` when `event_ts` lives in the same time base."""
         groups: dict[int, list[tuple[int, int, str, float, float, float, float]]] = (
             defaultdict(list)
         )
         for arb, byte, bit, transition, event_ts, z, mu, sigma in rows:
             groups[arb].append((byte, bit, transition, event_ts, z, mu, sigma))
+
+        if bucket_window is not None:
+            bw_start, bw_end = bucket_window
+            span = max(bw_end - bw_start, 1e-9)
+            bucket_size = span / bucket_count
 
         out: list[GroupedRow] = []
         for arb, items in groups.items():
@@ -944,6 +1017,9 @@ class LiveView(App):
             best_z = -math.inf
             best_mu = 0.0
             best_sigma = 0.0
+            buckets: list[int] = (
+                [0] * bucket_count if bucket_window is not None else []
+            )
             for byte, bit, transition, event_ts, z, mu, sigma in items:
                 bits_seen.add((byte, bit))
                 if transition not in seen_trans:
@@ -955,6 +1031,13 @@ class LiveView(App):
                     latest = event_ts
                 if z > best_z:
                     best_z, best_mu, best_sigma = z, mu, sigma
+                if bucket_window is not None:
+                    idx = int((event_ts - bw_start) / bucket_size)
+                    if idx < 0:
+                        idx = 0
+                    elif idx >= bucket_count:
+                        idx = bucket_count - 1
+                    buckets[idx] += 1
             out.append(
                 GroupedRow(
                     arb=arb,
@@ -965,6 +1048,8 @@ class LiveView(App):
                     mu=best_mu,
                     sigma=best_sigma,
                     transitions=transitions,
+                    count=len(items),
+                    bucket_timeline=buckets,
                 )
             )
         return out
@@ -1090,11 +1175,15 @@ class LiveView(App):
         return known_text, unknown_text
 
     def discovery_text(self) -> str:
-        """Always-on anomaly pane (ADR 0007 #4).
+        """Always-on anomaly pane (ADR 0007 §4, redesigned in ADR 0011).
 
-        Surfaces every bit-flip that the EWMA scored as anomalous since
-        the last `retention_secs` seconds, grouped by ID, newest-first.
-        Marks are NOT required — this fills passively as the bus reacts."""
+        Stable-by-arb rows with a per-row activity sparkline + brightness
+        decay + co-occurrence accent + mark halo. The eye anchors on
+        positions, fresh events brighten in place, and bursts colour
+        together so cross-ID structure is visible at a glance. Marks
+        are still NOT required — the pane fills passively as the bus
+        reacts; halo just bridges back to the mark-driven pane when
+        the operator does press a hotkey."""
         now = time.time()
         cutoff = now - self.retention_secs
         # Prune from the left — entries are appended in ts-monotonic order.
@@ -1105,34 +1194,114 @@ class LiveView(App):
             return header + "\n  (idle — no anomalous flips yet)"
 
         groups = self._group_rows_by_arb(
-            (arb, byte, bit, transition, ts, z, mu, sigma)
-            for ts, arb, byte, bit, transition, _interval, z, mu, sigma in self.recent_anomalies
+            (
+                (arb, byte, bit, transition, ts, z, mu, sigma)
+                for ts, arb, byte, bit, transition, _interval, z, mu, sigma in self.recent_anomalies
+            ),
+            bucket_window=(cutoff, now),
+            bucket_count=SPARKLINE_WIDTH,
         )
-        groups.sort(key=lambda g: -g.latest_ts)  # newest first
+        # Stable position — arb ascending. Rows above an aged-out gap
+        # keep their position; everything below shifts up by one (rare,
+        # ADR 0011 accepts the small jitter for the no-reshuffle win).
+        groups.sort(key=lambda g: g.arb)
+
+        accent_by_arb = self._anomaly_accents(groups, now)
+        halo_window_end = (
+            self.last_event_ts + FLIP_WINDOW_SECS
+            if self.last_event_ts is not None
+            else None
+        )
+        halo_visible = is_halo_active(now, self.last_event_ts)
+
         max_rows = DISCOVERY_PANE_ROWS - 2
-        body = [
-            _render_group_row(g, f"-{now - g.latest_ts:.1f}s")
-            for g in groups[:max_rows]
-        ]
+        body: list[str] = []
+        for g in groups[:max_rows]:
+            row_halo = (
+                halo_visible
+                and self.last_event_ts is not None
+                and halo_window_end is not None
+                and self.last_event_ts <= g.latest_ts <= halo_window_end
+            )
+            body.append(
+                _render_anomaly_row(
+                    g,
+                    now,
+                    accent=accent_by_arb.get(g.arb),
+                    halo=row_halo,
+                )
+            )
         if len(groups) > max_rows:
             body.append(f"  … and {len(groups) - max_rows} more")
         return header + "\n" + "\n".join(body)
 
+    def _anomaly_accents(
+        self, groups: list[GroupedRow], now: float
+    ) -> dict[int, str]:
+        """ADR 0011 — pick co-occurrence accent colours for the live
+        anomalies pane.
+
+        Cluster groups whose `latest_ts` falls within
+        ANOMALY_COOCCUR_SECS of each other AND whose latest event is
+        recent (within ANOMALY_HOT_SECS). Clusters of size ≥2 get an
+        accent from ANOMALY_ACCENT_COLORS in cluster-onset order;
+        singletons and stale bursts get nothing. Only the most-recent
+        few clusters are coloured — colour exhaustion past that means
+        the eye stops reading accents as meaningful."""
+        recent = [g for g in groups if is_hot(now, g.latest_ts)]
+        if len(recent) < 2:
+            return {}
+        recent.sort(key=lambda g: g.latest_ts)
+        clusters: list[list[GroupedRow]] = []
+        current: list[GroupedRow] = [recent[0]]
+        for g in recent[1:]:
+            if g.latest_ts - current[-1].latest_ts <= ANOMALY_COOCCUR_SECS:
+                current.append(g)
+            else:
+                clusters.append(current)
+                current = [g]
+        clusters.append(current)
+        out: dict[int, str] = {}
+        colour_idx = 0
+        for cluster in clusters:
+            if len(cluster) < 2:
+                continue
+            colour = ANOMALY_ACCENT_COLORS[colour_idx % len(ANOMALY_ACCENT_COLORS)]
+            colour_idx += 1
+            for g in cluster:
+                out[g.arb] = colour
+        return out
+
     def active_bytes_text(self) -> str:
-        """Active-unknown-bytes pane (ADR 0008).
+        """Active-unknown-bytes pane (ADR 0008, redesigned in ADR 0012).
 
         Lists every (arb, byte) currently tripping the rolling-range
-        threshold OR still within the hysteresis tail, sorted by ratio
-        descending. Bytes covered by signals.yaml are excluded — they
-        belong to the decoded pane. D7 is gated by --show-d7 for parity
-        with the bit panes (D7 checksums would dominate)."""
+        threshold OR still within the retention window, sorted by
+        peak ratio descending so recently-loud rows stay at the top
+        through their decay tier. Bytes covered by signals.yaml are
+        excluded — they belong to the decoded pane. D7 is gated by
+        --show-d7 for parity with the bit panes (D7 checksums would
+        dominate).
+
+        Visual contract per ADR 0012:
+        - HOT tier (active_now OR age < hysteresis_secs): default
+          brightness, live sparkline from `display_buffer`.
+        - DIM tier (hysteresis_secs ≤ age < retention_secs): row wrapped
+          in `[dim]`, sparkline from `frozen_buffer` (the shape the
+          byte was making at peak — preserved through decay).
+        - At active→tail transition, snapshot `display_buffer` into
+          `frozen_buffer` so the sparkline doesn't wash out. Cleared
+          if activity resumes (`_update_byte_activity`).
+        - At retention boundary, the row drops AND peak_ratio/ts
+          reset so the next episode starts fresh."""
         now = time.time()
         header = (
             f"[bold]Active unknown bytes[/bold]  "
             f"[dim](window {self.byte_activity_window_secs:.1f}s, "
-            f"ratio ≥ {self.byte_activity_ratio:.1f}×)[/dim]"
+            f"ratio ≥ {self.byte_activity_ratio:.1f}×, "
+            f"hold {self.byte_activity_retention_secs:.0f}s)[/dim]"
         )
-        rows: list[tuple[float, int, int, int, float, float, bool]] = []
+        rows: list[tuple[float, int, int, int, bool, bool]] = []
         for (arb, byte), stats in self.byte_activity.items():
             if (arb, byte) in self._byte_index:
                 continue
@@ -1148,38 +1317,65 @@ class LiveView(App):
                 BASELINE_FLOOR, self.byte_activity_ratio * stats.baseline_range_ewma
             )
             active_now = short_range > threshold
-            in_tail = (
-                stats.last_active_ts is not None
-                and now - stats.last_active_ts < self.byte_activity_hysteresis_secs
+
+            # Visibility check (ADR 0012): row stays through the full
+            # retention window. Past it, drop and reset peak so the next
+            # episode for this byte starts clean.
+            age = (
+                now - stats.last_active_ts
+                if stats.last_active_ts is not None
+                else math.inf
             )
-            if not (active_now or in_tail):
+            if not active_now and age >= self.byte_activity_retention_secs:
+                stats.peak_ratio = 0.0
+                stats.peak_ratio_ts = None
+                stats.frozen_buffer = []
                 continue
-            cur = self.current_bytes.get((arb, byte), 0)
+            if not active_now and stats.last_active_ts is None:
+                # Never been active, currently quiet — nothing to show.
+                continue
+
+            # Freeze the display buffer at the active→tail transition so
+            # the sparkline preserves the byte's shape through decay.
+            if (
+                not active_now
+                and not stats.frozen_buffer
+                and stats.display_buffer
+            ):
+                stats.frozen_buffer = list(stats.display_buffer)
+
             first_activity = stats.baseline_range_ewma <= BASELINE_FLOOR
-            if first_activity:
-                ratio = math.inf
-            else:
-                ratio = short_range / stats.baseline_range_ewma
-            rows.append((ratio, arb, byte, cur, short_range, stats.baseline_range_ewma, first_activity))
+            cur = self.current_bytes.get((arb, byte), 0)
+            dim = (not active_now) and age >= self.byte_activity_hysteresis_secs
+            rows.append((stats.peak_ratio, arb, byte, cur, dim, first_activity))
+
         if not rows:
             return header + "\n  (idle — no anonymous byte currently sweeping)"
+        # ADR 0012 — sort by peak ratio so recently-loud rows stay anchored
+        # at the top across their decay tier. math.inf naturally wins.
         rows.sort(key=lambda r: -r[0])
         max_rows = ACTIVE_BYTES_PANE_ROWS - 2
         body: list[str] = []
-        for ratio, arb, byte, cur, short_range, _ewma, first in rows[:max_rows]:
-            buf_vals = [v for _, v in self.byte_activity[(arb, byte)].buffer]
-            spark = sparkline([float(v) for v in buf_vals])
-            ratio_str = "∞" if math.isinf(ratio) else f"{ratio:.1f}×"
-            # First-activity wins the trailing slot — it's more useful than a
-            # shape label in that moment (see ADR 0008 §6).
+        for _peak, arb, byte, cur, dim, first in rows[:max_rows]:
+            stats = self.byte_activity[(arb, byte)]
+            # Suffix logic preserved from ADR 0008 §6 — first-activity
+            # wins the trailing slot over the shape label.
             if first:
                 suffix = "  [dim](first activity)[/dim]"
             else:
-                shape = classify_byte(buf_vals)
+                shape_src = stats.frozen_buffer or list(stats.display_buffer)
+                shape = classify_byte([int(v) for v in shape_src])
                 suffix = f"  [dim]{shape}[/dim]" if shape else ""
             body.append(
-                f"  0x{arb:03X} D{byte}   value={cur:>3} / 0x{cur:02X}   "
-                f"{spark}   range {int(short_range):>4}   ratio={ratio_str}{suffix}"
+                _render_byte_row(
+                    stats,
+                    arb,
+                    byte,
+                    cur,
+                    now=now,
+                    dim=dim,
+                    shape_suffix=suffix,
+                )
             )
         if len(rows) > max_rows:
             body.append(f"  … and {len(rows) - max_rows} more")
@@ -1205,5 +1401,5 @@ class LiveView(App):
             f"snapshots {self.snapshot_seq}{extra_str}{dropped}\n"
             f"[dim]{tunables}[/dim]\n"
             f"[dim]hotkey mark · '.' snap · '?' legend · 'q' quit · "
-            f"Ctrl-↑↓ z · Alt-↑↓ ratio · Ctrl-D D7 · Ctrl-Y supp · Ctrl-N hyp · Ctrl-1..5 fold[/dim]"
+            f"F6/F7 z · Shift-←→ ratio · Ctrl-D D7 · Ctrl-Y supp · Ctrl-N hyp · F1..F5 fold[/dim]"
         )
