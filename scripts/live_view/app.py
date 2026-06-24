@@ -807,8 +807,9 @@ class LiveView(App):
 
     def watch_text(self) -> str:
         """Render the pinned-watch pane (ADR 0007 #1). One row per pin
-        with current value, a 12-cell sparkline of the recent buffer, and
-        the pin origin so a raw triplet stays unambiguous."""
+        with current value, a 12-cell sparkline of the recent buffer, the
+        peak value over the sparkline window (blank for boolean pins),
+        and the pin origin so a raw triplet stays unambiguous."""
         header = "[bold]Watch[/bold]"
         if not self.watch_pins:
             return header + "  [dim](press w to pin a signal; u to unpin)[/dim]"
@@ -816,8 +817,10 @@ class LiveView(App):
         for pin in self.watch_pins:
             value_str = pin.current_text(self.latest, self.current_bytes)
             spark = sparkline(list(pin.buffer), boolean=pin.boolean)
+            peak = pin.peak_text()
+            peak_part = f"peak {peak:>10}" if peak else " " * 15
             body.append(
-                f"  {pin.label:24s}  {value_str:>10}   {spark}   [dim]{pin.label}[/dim]"
+                f"  {pin.label:24s}  {value_str:>10}   {spark}   {peak_part}   [dim]{pin.label}[/dim]"
             )
         return header + "\n" + "\n".join(body)
 

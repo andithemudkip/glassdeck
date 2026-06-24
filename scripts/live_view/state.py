@@ -183,6 +183,21 @@ class WatchPin:
             return "—" if val is None else str((val >> bit) & 1)
         return "—"
 
+    def peak_text(self) -> str:
+        """Render the peak of the current sparkline buffer in display units.
+        Returns "" for boolean pins (peak is meaningless for square waves)
+        and for empty buffers (no samples yet)."""
+        if self.boolean or not self.buffer:
+            return ""
+        peak_raw = max(self.buffer)
+        if self.signal is None:
+            return f"{peak_raw:.0f}"
+        if self.signal.encoding == "uint" and (
+            self.signal.scale != 1.0 or self.signal.offset != 0.0
+        ):
+            return self.signal.format(peak_raw * self.signal.scale + self.signal.offset)
+        return self.signal.format(int(peak_raw))
+
 
 def _signed_secs(t: float) -> str:
     """`+0.12s` for positive, `-0.12s` for negative — used by mark-driven
