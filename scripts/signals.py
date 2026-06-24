@@ -93,6 +93,9 @@ class Signal:
             value = 0
             for b_index in order:
                 value = (value << 8) | data[b_index]
+            if self.bit_offset != 0 or self.bit_length != 8 * len(self.bytes_):
+                mask = (1 << self.bit_length) - 1
+                value = (value >> self.bit_offset) & mask
             return value
         assert self.byte is not None
         if self.byte >= len(data):
@@ -118,6 +121,12 @@ class Signal:
         if self.is_multi_byte:
             assert self.bytes_ is not None
             byte_list = ",".join(f"D{b}" for b in self.bytes_)
+            if self.bit_length != 8 * len(self.bytes_):
+                return (
+                    f"{arb} {byte_list} bits {self.bit_offset}.."
+                    f"{self.bit_offset + self.bit_length - 1} "
+                    f"({self.byte_order}-endian uint{self.bit_length})"
+                )
             return f"{arb} {byte_list} ({self.byte_order}-endian uint{self.bit_length})"
         assert self.byte is not None
         if self.bit_length == 1:
@@ -197,9 +206,14 @@ def _parse_entry(entry: dict) -> Signal:
         byte_order = entry.get("byte_order")
         if byte_order not in VALID_BYTE_ORDER:
             raise SchemaError(f"byte_order {byte_order!r} not in {sorted(VALID_BYTE_ORDER)}")
-        if bit_length != 8 * len(bytes_):
+        max_bits = 8 * len(bytes_)
+        if bit_length > max_bits:
             raise SchemaError(
-                f"bit_length {bit_length} does not match {len(bytes_)} bytes (expected {8 * len(bytes_)})"
+                f"bit_length {bit_length} exceeds {len(bytes_)} bytes ({max_bits})"
+            )
+        if bit_offset < 0 or bit_offset + bit_length > max_bits:
+            raise SchemaError(
+                f"bit_offset+bit_length ({bit_offset}+{bit_length}) overflows {len(bytes_)}-byte slot"
             )
     else:
         byte = entry["byte"]

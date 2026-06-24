@@ -1,0 +1,191 @@
+name: handlebar-switches-engine-off
+description: >
+  Engine-off bit hunt for left/right turn indicators, high beam, horn, and
+  brake levers. All inputs sit on the same handlebar pods; bike sits on its
+  side stand throughout. Each input is held in each state long enough to
+  span multiple broadcast cycles (and, for indicators, multiple visible
+  flash cycles) so a window-aware bit scan can attribute each one.
+experiment: 2026-06-24-handlebar-switches-engine-off
+
+# Timing convention: auto-marks fire at STEP START — the moment the rider
+# is cued to take the switch action. Hold durations are chosen so the
+# 100 ms-cohort always-on IDs (540, 541) get at least ~50 samples per
+# window, and the indicators get >= 5 flash cycles per "on" hold.
+#
+# Mark keys:
+#   space — key-on / phase boundary
+#   l     — left indicator switch action
+#   r     — right indicator switch action
+#   h     — hazard button press
+#   b     — high beam action (flash-to-pass press or latched toggle)
+#   n     — horn press
+#   f     — front brake lever squeeze/release
+#   p     — rear brake pedal press/release
+
+steps:
+  # ---------------------------------------------------------------- Setup
+  - prompt: "Key OFF, kill RUN, neutral, bike on side stand. Hands off. Recording bus silence."
+    duration_secs: 6
+
+  - prompt: "Turn key ON now. Confirm dash self-test completes. No starter press at any point."
+    duration_secs: 30
+    countdown_from: 3
+    mark: { key: mark, label: "key on" }
+
+  - prompt: "Settled engine-off baseline. Hands off the bars. All switches in rest position."
+    duration_secs: 15
+
+  # -------------------------------------- Phase A — LEFT indicator
+  - prompt: >
+      PHASE A — LEFT indicator. 3 cycles of (on, hold 8 s, cancel, hold 8 s).
+      Press `l` at the moment of each switch action. Watch the dash arrow
+      to confirm each state.
+    duration_secs: 8
+
+  - repeat: 3
+    steps:
+      - prompt: "Flick switch to LEFT. Press `l` at the flick. Hold."
+        duration_secs: 8
+        countdown_from: 3
+        mark: { key: l, label: "L on {iter} of {loop_count}" }
+      - prompt: "Press centre to CANCEL left indicator. Press `l` at the press. Hold."
+        duration_secs: 8
+        countdown_from: 3
+        mark: { key: l, label: "L cancel {iter} of {loop_count}" }
+
+  - prompt: "Confirm dash arrow OFF, hands off."
+    duration_secs: 5
+
+  # -------------------------------------- Phase B — RIGHT indicator
+  - prompt: >
+      PHASE B — RIGHT indicator. Mirror of Phase A.
+      Press `r` at each switch action.
+    duration_secs: 8
+
+  - repeat: 3
+    steps:
+      - prompt: "Flick switch to RIGHT. Press `r` at the flick. Hold."
+        duration_secs: 8
+        countdown_from: 3
+        mark: { key: r, label: "R on {iter} of {loop_count}" }
+      - prompt: "Press centre to CANCEL right indicator. Press `r` at the press. Hold."
+        duration_secs: 8
+        countdown_from: 3
+        mark: { key: r, label: "R cancel {iter} of {loop_count}" }
+
+  - prompt: "Confirm dash arrow OFF, hands off."
+    duration_secs: 5
+
+  # -------------------------------------- Phase C — HAZARDS (skippable)
+  - prompt: >
+      PHASE C — HAZARDS. If the bike doesn't have a hazard button, or it's
+      ignition-locked and doesn't respond engine-off, press `q` now to end
+      capture — Phases A and B already covered the underlying L+R bits.
+      Otherwise: 3 cycles of (hazard on, hold 8 s, hazard off, hold 8 s).
+      Press `h` at each press.
+    duration_secs: 12
+
+  - repeat: 3
+    steps:
+      - prompt: "Press HAZARD button to ENABLE. Press `h` at the press. Hold."
+        duration_secs: 8
+        countdown_from: 3
+        mark: { key: h, label: "Hazard on {iter} of {loop_count}" }
+      - prompt: "Press HAZARD button to DISABLE. Press `h` at the press. Hold."
+        duration_secs: 8
+        countdown_from: 3
+        mark: { key: h, label: "Hazard off {iter} of {loop_count}" }
+
+  - prompt: "Confirm dash all-arrows OFF, hands off."
+    duration_secs: 5
+
+  # -------------------------------------- Phase D — HIGH BEAM
+  - prompt: >
+      PHASE D — HIGH BEAM. Two halves.
+      Half 1: 3 momentary FLASH-TO-PASS presses (~1 s each).
+      Half 2: 3 latched ON-then-OFF cycles, 6 s held in each state.
+      Press `b` at every action. Watch the blue dash indicator.
+    duration_secs: 12
+
+  - repeat: 3
+    steps:
+      - prompt: "FLASH-TO-PASS — pull the lever toward you, hold ~1 s, release. Press `b` at the pull."
+        duration_secs: 5
+        countdown_from: 3
+        mark: { key: b, label: "FTP {iter} of {loop_count}" }
+
+  - prompt: "Half 1 done. Hands off. Settling."
+    duration_secs: 6
+
+  - repeat: 3
+    steps:
+      - prompt: "Push switch UP to latch HIGH BEAM on. Press `b` at the push. Hold."
+        duration_secs: 6
+        countdown_from: 3
+        mark: { key: b, label: "HB on {iter} of {loop_count}" }
+      - prompt: "Push switch back to LOW. Press `b` at the push. Hold."
+        duration_secs: 6
+        countdown_from: 3
+        mark: { key: b, label: "HB off {iter} of {loop_count}" }
+
+  - prompt: "Confirm blue indicator OFF, low beam steady."
+    duration_secs: 5
+
+  # -------------------------------------- Phase E — HORN
+  - prompt: >
+      PHASE E — HORN. 5 short presses (~1 s each), with 4 s of settle
+      between presses to keep each pulse in its own analysis window.
+      Press `n` at each press.
+    duration_secs: 8
+
+  - repeat: 5
+    steps:
+      - prompt: "Press HORN ~1 s, release. Press `n` at the press."
+        duration_secs: 5
+        countdown_from: 3
+        mark: { key: n, label: "Horn {iter} of {loop_count}" }
+
+  - prompt: "Confirm horn silent, hands off."
+    duration_secs: 6
+
+  # -------------------------------------- Phase F — BRAKE LEVERS
+  - prompt: >
+      PHASE F — BRAKE LEVERS. 3 front-lever cycles, then 3 rear-pedal cycles.
+      Each cycle: hold the brake for 6 s, release for 4 s.
+      Press `f` (front) / `p` (rear) at each squeeze and each release.
+    duration_secs: 10
+
+  - repeat: 3
+    steps:
+      - prompt: "Squeeze FRONT brake lever and hold. Press `f` at the squeeze."
+        duration_secs: 6
+        countdown_from: 3
+        mark: { key: f, label: "Front brake on {iter} of {loop_count}" }
+      - prompt: "Release FRONT brake. Press `f` at the release."
+        duration_secs: 4
+        countdown_from: 3
+        mark: { key: f, label: "Front brake off {iter} of {loop_count}" }
+
+  - prompt: "Front-brake cycles done. Hands off."
+    duration_secs: 5
+
+  - repeat: 3
+    steps:
+      - prompt: "Press REAR brake pedal and hold. Press `p` at the press."
+        duration_secs: 6
+        countdown_from: 3
+        mark: { key: p, label: "Rear brake on {iter} of {loop_count}" }
+      - prompt: "Release REAR brake. Press `p` at the release."
+        duration_secs: 4
+        countdown_from: 3
+        mark: { key: p, label: "Rear brake off {iter} of {loop_count}" }
+
+  - prompt: "All brakes released, hands and feet off the bike."
+    duration_secs: 6
+
+  # ----------------------------------------------------------- Shutdown
+  - prompt: "Key OFF. Hold 3 s of tail silence."
+    duration_secs: 6
+
+  - prompt: "Done. Press q to stop capture and fill in session.md."
+    duration_secs: null

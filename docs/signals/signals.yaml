@@ -13,8 +13,13 @@
 #   byte           int (single byte) — present for bit / nibble / byte signals
 #   bytes          list[int] (multi-byte signals) — ordered most-significant first when byte_order is big
 #   byte_order     big | little — required only for multi-byte signals
-#   bit_offset     LSB-numbered offset within `byte` (default 0). Ignored for `bytes`.
-#   bit_length     number of bits the signal occupies (default 8)
+#   bit_offset     LSB-numbered offset (default 0). For `byte`, within that byte.
+#                  For `bytes`, within the combined value — bit 0 is the LSB of
+#                  the least-significant byte. Use with bit_length < 8*len(bytes)
+#                  to describe a sub-field packed inside a multi-byte slot
+#                  (e.g. a 12-bit value occupying the high bits of a 16-bit slot).
+#   bit_length     number of bits the signal occupies (default 8). For `bytes`,
+#                  defaults to 8*len(bytes) when the whole slot is the signal.
 #   encoding       bool | uint | enum
 #   scale          multiplier applied to raw integer (default 1)
 #   offset         added after scale (default 0)
@@ -154,6 +159,20 @@
   offset: 0
   unit: "km/h"
   notes: "1/16 km/h per LSB (best-fit slope 0.05633 across the engine-driven sweep; ~10% gap to 0.0625 attributed to back-of-envelope KTM 390 gearing × tyre circumference, pending OEM-speedo cross-check). D2 is a coarse mirror of the same speed at ~1/10 km/h that wraps at 25.5 km/h — not registered here (use D5:D6 as the source of truth). D3 stays 0x00 (not a high byte for D2)."
+
+- name: wheel_speed_front
+  status: confirmed
+  finding: signal-wheel-speed-front
+  arbitration_id: 0x12D
+  bytes: [0, 1]
+  byte_order: big
+  bit_offset: 4
+  bit_length: 12
+  encoding: uint
+  scale: 0.08333333333333333
+  offset: 0
+  unit: "km/h"
+  notes: "12-bit BE value packed into the high 12 bits of D0:D1 (D0 = high 8 bits, D1 high nibble = low 4 bits). Low nibble of D1 carries other fields — see signal-12d-d1-bit0. LSB = 1/12 km/h on the extracted 12-bit value (equivalently 1/192 km/h on the raw u16). ECU snaps to 0 below ~2.33 km/h (raw 448) — does not transmit intermediate low values."
 
 - name: engine_on_counter
   status: confirmed

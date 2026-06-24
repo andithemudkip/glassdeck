@@ -924,9 +924,19 @@ class LiveView(App):
         index: dict[tuple[int, int, int], str] = {}
         for sig in self.signals:
             if sig.bytes_ is not None:
-                for b in sig.bytes_:
-                    for bit in range(8):
-                        index[(sig.arbitration_id, b, bit)] = sig.name
+                if sig.bit_length == 8 * len(sig.bytes_):
+                    for b in sig.bytes_:
+                        for bit in range(8):
+                            index[(sig.arbitration_id, b, bit)] = sig.name
+                else:
+                    ordered = (
+                        sig.bytes_ if sig.byte_order == "big" else tuple(reversed(sig.bytes_))
+                    )
+                    for combined_bit in range(sig.bit_offset, sig.bit_offset + sig.bit_length):
+                        byte_from_lsb = combined_bit // 8
+                        bit_in_byte = combined_bit % 8
+                        byte_index = ordered[-1 - byte_from_lsb]
+                        index[(sig.arbitration_id, byte_index, bit_in_byte)] = sig.name
             elif sig.byte is not None:
                 for bit in range(sig.bit_offset, sig.bit_offset + sig.bit_length):
                     index[(sig.arbitration_id, sig.byte, bit)] = sig.name

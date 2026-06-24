@@ -1,6 +1,7 @@
 ---
 date: 2026-06-23
-status: planned
+status: superseded
+superseded_by: 2026-06-24-front-wheel-hand-spin
 phase: 2
 related:
   findings:
@@ -10,10 +11,13 @@ related:
     - ktm-can-decoder
   experiments:
     - 2026-06-22-wheel-spin-paddock-stand
+    - 2026-06-24-front-wheel-hand-spin
   logs: []
 ---
 
 # First motion capture — push the bike at walking pace, engine off
+
+> **Superseded 2026-06-24** by [[2026-06-24-front-wheel-hand-spin]]. The mobile bike-push setup (laptop in backpack, tethered USB, dash visible while walking) is finnicky with the current rig; jacking the front of the bike up and spinning the front wheel by hand covers the same goals — front-wheel byte at `12D` D0..D1, uint16-vs-single-byte mirror test, LSB calibration against the OEM speedo (the speedo reads the front wheel, so a front spin makes it display real km/h), plus auto-headlight and ABS-lamp threshold pins via the rolling-threshold analysis. Kept on file as a higher-confidence fallback if the front-wheel hand-spin produces an ambiguous LSB fit or fails to locate the auto-headlight bit; the bike-push then adds simultaneous-both-wheels cross-check and a longer steady-state km/h window.
 
 ## Hypothesis
 
