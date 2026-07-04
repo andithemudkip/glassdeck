@@ -76,6 +76,7 @@ class LiveView(App):
         Binding("tab", "toggle_screen", "switch", show=False, priority=True),
         Binding("space", "toggle_pause", "pause", show=False, priority=True),
         Binding("left", "prev_step", "prev", show=False, priority=True),
+        Binding("right", "skip_step", "skip", show=False, priority=True),
         # ADR 0010 §2 — hot-tunable thresholds. Every printable char is
         # reserved for mark hotkeys (capture.py), so we use non-printable
         # keys. Mac-terminal constraints push the specific choices:
@@ -200,6 +201,9 @@ class LiveView(App):
         # (monotonic_ts, key, label). Read by the screen each refresh; it
         # fades the flash itself by comparing against `time.monotonic()`.
         self._last_mark: tuple[float, str, str] | None = None
+        # Skip flash is tracked separately so the "✓ marked" flash isn't
+        # overloaded with a non-mark event. Latest of the two wins in the UI.
+        self._last_skip: tuple[float, str] | None = None
 
         # live_decode.csv — long format so per-row content is uniform
         # regardless of which signal a frame fed. In --watch mode there's
@@ -340,6 +344,31 @@ class LiveView(App):
         )
         self.step_index = new_index
         self._start_step(new_index, fire_mark=False)
+
+    def action_skip_step(self) -> None:
+        """→ — skip the current step. Logs a procedure-skip event so analysis
+        can see the step was abandoned mid-way (not completed). Advances to
+        the next step and fires its auto-mark normally — entering a step is
+        always a commit to it. No-op on the last step: nowhere to go."""
+        if self.procedure is None:
+            return
+        if self.step_index >= len(self.procedure.steps) - 1:
+            return
+        step = self.procedure.steps[self.step_index]
+        next_index = self.step_index + 1
+        # Tag the skipped step's auto-mark (if any) so analyzers can pair
+        # this skip with the now-spurious entry mark that already fired.
+        mark_tag = (
+            f" [mark={step.mark.key}|{step.mark.label or ''}]"
+            if step.mark is not None
+            else ""
+        )
+        self.events_log.log(
+            "procedure-skip",
+            f"skip step {self.step_index + 1} of {len(self.procedure.steps)}: {step.prompt}{mark_tag}",
+        )
+        self._last_skip = (time.monotonic(), step.prompt)
+        self._start_step(next_index)
 
     # ADR 0010 §2 — hot-tunable thresholds. No explicit refresh call — the
     # 4 Hz tick picks up the new value on its next pass, which is exactly

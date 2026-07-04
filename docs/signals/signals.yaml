@@ -186,3 +186,16 @@
   offset: 0
   unit: s
   notes: "Engine-running seconds counter, 7-bit modulo 128 (wraps every 128 s). Rate confirmed constant ~1 Hz from idle to ~5500 RPM via the engine-driven rear-spin capture — not an engine-cycle / fuel-injection counter. Bit 7 reserved (never toggled). Frozen engine-off."
+
+- name: engine_off_counter
+  status: confirmed
+  finding: signal-engine-off-counter
+  arbitration_id: 0x541
+  byte: 6
+  bit_offset: 0
+  bit_length: 8
+  encoding: uint
+  scale: 1
+  offset: 0
+  unit: s
+  notes: "Engine-OFF seconds counter, 8-bit modulo 256 (wraps every 256 s). 1 Hz tick rate confirmed across all 14 sessions in the 2026-06-30 corpus sweep. Snaps to 0 within one broadcast period of engine-start and holds at 0 throughout the engine-running window. Gating is on engine-running, not kill-switch position — kill toggles RUN↔STOP don't reset or pause the counter. Paired with engine_on_counter at D4 on the same ID."

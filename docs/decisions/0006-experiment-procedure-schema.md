@@ -70,14 +70,14 @@ The natural extension is to (a) give procedures a machine-readable form and (b) 
   │    → Toggle kill switch to STOP              (5s, ⏱3)    │
   │    → Toggle kill switch back to RUN          (5s, ⏱3)    │
   │                                                          │
-  │  Tab: analysis view   Space: pause   ←: prev step        │
+  │  Tab: analysis view   Space: pause   ←/→: prev/skip step │
   ├──────────────────────────────────────────────────────────┤
   │  04:23   frames 12,438   ids 11   marks 4   step 4/13    │
   └──────────────────────────────────────────────────────────┘
   ```
 
 - Big prompt + big countdown is the focal point; next 3 steps shown in a compact preview so the rider knows what to prepare for. Status line preserved at the bottom for bus-alive feedback.
-- Hotkeys: `Tab` switch screen; `Space` pause/resume the procedure (capture continues — only the step advance is paused); `←` jump to previous step (logs a `procedure-rewind` event); `q` quit. The classic hotkeys (k/g/n/etc.) remain available for ad-hoc marking on top of the procedure marks.
+- Hotkeys: `Tab` switch screen; `Space` pause/resume the procedure (capture continues — only the step advance is paused); `←` jump to previous step (logs a `procedure-rewind` event); `→` skip the current step (logs a `procedure-skip` event tagged with the abandoned step's auto-mark, then advances and fires the next step's mark normally); `q` quit. The classic hotkeys (k/g/n/etc.) remain available for ad-hoc marking on top of the procedure marks.
 
 **Snapshot the procedure into the session directory.**
 
@@ -89,7 +89,7 @@ The natural extension is to (a) give procedures a machine-readable form and (b) 
 - **Post-hoc scripts get richer event-mark labels.** Decoder scripts like `kill_switch_scan.py` currently look for the rider's `k` keypresses and assume exactly six. With procedure-driven marks they can match by label (`kill toggle N of 6 (→ STOP)` vs `(→ RUN)`) and explicitly verify the expected count. Migration optional, opportunistic — the existing label-agnostic windowing still works.
 - **Operator-screen mode trades the analysis view for focus during the experiment.** When you need novel-discovery surface (Tab back to analysis), you have it; when you're mid-countdown, you don't see bit-flip tables you can't act on. This matches the cognitive-load reality the rider lives with.
 - **Auto-marks vs human marks are timed differently.** A procedure-driven mark is logged at the *cue* moment, before the rider physically completes the action (the existing rider-keyed `k` mark is logged at the *intent* moment, also before completion — same class of latency, but procedure marks are zero-jitter relative to the prompt). Scan scripts that trim "debounce slop" around marks (e.g. `kill_switch_scan.py`'s post-mark trim) keep their existing logic; the trim window may want tuning if procedure-driven sessions show systematically different rider-completion latencies.
-- **Pause + rewind change the session timeline shape.** A `procedure-rewind` event mark lets post-hoc scripts notice and either ignore the rewound segment or analyse both attempts. Pauses simply stretch the timeline; capture continues throughout.
+- **Pause + rewind + skip change the session timeline shape.** A `procedure-rewind` event mark lets post-hoc scripts notice and either ignore the rewound segment or analyse both attempts. A `procedure-skip` event marks a step the rider abandoned mid-way — its label carries a `[mark=<key>|<label>]` suffix when the skipped step had an auto-mark, so analysers can identify and retract the now-spurious entry mark (the auto-mark fires on step entry, before the skip key is pressed). Pauses simply stretch the timeline; capture continues throughout.
 - **Library surface grows.** A small `scripts/procedure.py` (parser, validation, step iterator with countdown/duration logic, loop expansion) becomes a new module alongside `scripts/signals.py`. Both are schema loaders; both have post-hoc consumers and live consumers. Same pattern.
 - **Scope discipline.** Procedures are for *scripted* experiments. Free-form first-motion captures, debug sessions, or any experiment whose value lies in observation rather than timing don't need a procedure file. Don't gold-plate every experiment with one — the existence of the file should mean "this needs to be executed exactly as written."
 - **Future extensions deferred.** No nested repeats, no branching/conditional steps, no inline pass/fail criteria, no auto-replay against a captured log. All possible later if pressure exists; out of scope here.

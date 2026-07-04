@@ -9,7 +9,13 @@ references:
 
 # Throttle position — `120` byte D2 (uint8, 0–254)
 
-Throttle (grip) position on the 2020 Husqvarna Svartpilen 401 is broadcast in arbitration ID **`0x120`**, byte **D2**, as an unsigned 8-bit integer covering the grip travel.
+Throttle (rider grip) position on the 2020 Husqvarna Svartpilen 401 is broadcast in arbitration ID **`0x120`**, byte **D2**, as an unsigned 8-bit integer covering the grip travel.
+
+**Which "throttle" this is.** The bike has two physically distinct throttle sensors (per repair manual wiring diagram pages 30.4 and 30.9):
+- **B80 — throttle grip sensor** on the handlebar, 6-pin AP/6 connector, two redundant potentiometer channels (safety-critical for throttle-by-wire). Represents what the *rider* is asking for.
+- **M60 — throttle valve position sensor** on the throttle body, measures the actual butterfly angle. Represents what the *ECU* is commanding via the ride-by-wire motor.
+
+`120` D2 is **B80 (rider grip)**, not M60. Direct evidence: Phase A of [[2026-06-23-engine-driven-rear-spin]] held the bike in 1st gear with the clutch out and the rear wheel spinning at idle — drivetrain drag, ECU compensating by opening the butterfly to hold ~1700 RPM. `120` D2 read 0 throughout, matching the rider's grip (rider was not touching the throttle) rather than the butterfly (which was necessarily non-zero for the ECU to hold RPM). If `120` D2 were sourced from M60, it would have read the ECU's compensation. This distinction matters for the fuel-consumption model in [ADR 0017](../../decisions/0017-fuel-tracking-and-consumption-model.md) — grip is a rider-intent signal, not a load signal. A pure `RPM × grip` product will read fuel-idle-burn correctly (grip=0 → zero load term → idle-fuel term dominates) but will systematically under-model fuel during ECU load-compensation events (idle hold in gear, decel-cutoff transitions). Long-window auto-calibration against the sender absorbs most of this bias.
 
 ```
 throttle = data[2]            # 0 = closed, 254 = wide-open
@@ -55,7 +61,7 @@ The throttle sweep also tested two adjacent hypotheses; both were rejected by th
 
 - **Engine-on behaviour.** Encoding confirmed engine-off; engine-on confirmation pending in [`2026-06-18-engine-on-stationary-inputs`](../../experiments/2026-06-18-engine-on-stationary-inputs.md). Expectation: D2 behaves identically; the throttle channel is independent of engine state.
 - **Map / RBW state bit (`12A` D1 bit 6).** Stuck at 0 across the engine-off sweep. Engine-off may suppress it — re-test engine-on per the experiment above.
-- **`541` D6 weak correlation.** r ≈ +0.26 vs D2 across this capture with range 20 counts. Could be coincidental drift, could be a heavily filtered throttle derivative. Re-test with a longer / dual-direction sweep before promoting or rejecting.
+- ~~**`541` D6 weak correlation.** r ≈ +0.26 vs D2 across this capture with range 20 counts.~~ **Resolved by [[2026-06-30-unknown-byte-corpus-sweep]]:** `541` D6 is the engine-OFF seconds counter ([[signal-engine-off-counter]]), not throttle-derived. Full-corpus r vs throttle peaked at +0.40 in the throttle-sweep session, dominated by D6's monotonic 1 Hz ramp coinciding with the rider's slow sweep. Closed.
 - **Full-scale ceiling.** Verify whether 254 is a hard ceiling (sentinel) or a calibration knee by capturing a hard-to-the-stop snap; if the value briefly overshoots to 255 the ceiling is calibration, if it never does, 254 is likely a reserved sentinel.
 
 ## Evidence

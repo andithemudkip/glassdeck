@@ -25,7 +25,7 @@ front_wheel_kmh = ((data[0] << 4) | (data[1] >> 4)) / 12.0
 
 **Do NOT decode as a plain `(D0 << 8) | D1` uint16** — that's correct only when D1's low nibble is zero, which is true engine-off but not always engine-on (see [[signal-12d-d1-bit0]]).
 
-Same arbitration ID as the rear wheel ([[signal-wheel-speed-rear]]), different bytes, **different LSB family** — rear is 1/16 km/h, front is 1/192 km/h. See § "Front and rear use different LSBs (intentional)" below.
+Same arbitration ID as the rear wheel ([[signal-wheel-speed-rear]]), different bytes, **different LSB family** — rear is 1/16 km/h, front is 1/192 km/h. See § "Front and rear use different LSBs (intentional)" below. A *third* wheel-speed encoding lives at D3:D4 on the same ID as a redundant 16-bit BE mirror at 3/64 km/h LSB — see [[byte-12d-d3-d4-front-mirror]].
 
 ## Evidence
 

@@ -2,6 +2,8 @@
 
 Canonical CAN signal definitions — the eventual machine-readable output of the reverse-engineering effort.
 
+See [`coverage.md`](coverage.md) for the human-readable map: the table of decoded signals (linking each to its finding) and the per-ID byte coverage matrix that shows where the unknowns still live.
+
 Per-signal markdown files during early decoding; a consolidated `ktm390.dbc` (or YAML equivalent) once enough signals are stable. Each signal entry should include:
 
 - CAN ID (hex), byte offset, bit length, byte order

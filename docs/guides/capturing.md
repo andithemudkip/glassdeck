@@ -135,6 +135,7 @@ Hotkeys during a procedure:
 |---|---|
 | `Space` | Pause the procedure (capture itself never pauses — just the countdown) |
 | `←` | Rewind one step. Logs a `procedure-rewind` event but does NOT re-fire the step's auto-mark |
+| `→` | Skip the current step. Logs a `procedure-skip` event tagged with the skipped step's auto-mark (`[mark=key\|label]`) so analysers can retract it, then advances and fires the next step's mark normally. No-op on the last step |
 | `Tab` | Flip to the analysis screen to peek at decoded/flipped panes mid-run; Tab again to return |
 | `q` | Stop |
 
@@ -203,6 +204,7 @@ Function-key bindings are session-local — they never persist back to disk. If 
 | `Tab` | Toggle operator ↔ analysis screen |
 | `Space` | Pause / resume countdown |
 | `←` | Rewind one step |
+| `→` | Skip one step (logs `procedure-skip`) |
 
 ---
 

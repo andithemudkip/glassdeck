@@ -145,6 +145,8 @@ Applied to `540` and `450` (see `scripts/d7_540_450_check.py`):
 
 `540`'s 1,027 distinct payloads varying D0..D6 with D7 frozen at `0x00` rules out the cycle scheme decisively — there's plenty of payload movement, and the predicted `f(payload)` lands at non-cycle values (e.g. `0x16`, `0x19`, `0x0F`, `0x07`, `0x08` for the first few payloads tried). `450` doesn't vary its payload in the corpus, but its D7 is also flat zero across 27k frames.
 
+**Reconfirmed across the larger 14-session corpus** by [[2026-06-30-unknown-byte-corpus-sweep]]: `540` D7 = 18,809 frames / 0 non-zero; `450` D7 = 38,507 frames / 0 non-zero. The "always-zero" claim holds across every condition exercised so far — cold boot, idle (cold/warm/hot), full RPM sweep, post-kill decay, gear cycling, clutch toggling, kill toggling, side-stand toggling, throttle sweep engine-off, wheel-spin engine-off, wheel-spin engine-on, shift-lever-vs-clutch, front-wheel hand-spin, front-wheel decay + high-beam toggle.
+
 **Practical implication:** D7 on `540` and `450` is unprotected — either reserved (always-zero placeholder) or a different scheme that is currently inactive. For replay or novel TX on these IDs, the dashboard simply emits `D7 = 0x00`. No phase-lock, no `f` computation required.
 
 The "cycle family" is therefore the 9 catalog IDs (`120`, `121`, `129`, `12A`, `12D`, `12E`, `541`, `5A0`, `5B0`); `540` and `450` are outside the family.

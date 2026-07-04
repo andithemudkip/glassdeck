@@ -1,0 +1,64 @@
+id,byte,bucket,detail,union_size,moves_in_n_sessions
+120,4,GLOBAL-STATIC,value=0,1,0
+120,5,GLOBAL-STATIC,value=0,1,0
+120,6,GLOBAL-STATIC,value=0,1,0
+121,0,UNEXPLAINED-ACTIVE,moves in 6/14 sessions; best r=+0.796 (throttle),2,6
+121,1,UNEXPLAINED-ACTIVE,moves in 7/14 sessions; best r=+0.796 (throttle),88,7
+121,2,UNEXPLAINED-ACTIVE,moves in 4/14 sessions; best r=-0.663 (coolant),3,4
+121,3,UNEXPLAINED-ACTIVE,moves in 6/14 sessions; best r=+0.660 (rpm),114,6
+121,4,GLOBAL-STATIC,value=4,1,0
+121,5,UNEXPLAINED-ACTIVE,moves in 4/14 sessions; no ref correlation,4,4
+121,6,GLOBAL-STATIC,value=0,1,0
+129,0,UNEXPLAINED-ACTIVE,moves in 3/14 sessions; best r=+0.756 (wheel_rear),5,3
+129,1,GLOBAL-STATIC,value=0,1,0
+129,2,GLOBAL-STATIC,value=0,1,0
+129,3,GLOBAL-STATIC,value=1,1,0
+129,4,GLOBAL-STATIC,value=0,1,0
+129,5,GLOBAL-STATIC,value=0,1,0
+129,6,GLOBAL-STATIC,value=0,1,0
+12A,0,GLOBAL-STATIC,value=16,1,0
+12A,1,UNEXPLAINED-ACTIVE,moves in 13/14 sessions; no ref correlation,2,13
+12A,2,GLOBAL-STATIC,value=0,1,0
+12A,3,GLOBAL-STATIC,value=0,1,0
+12A,4,GLOBAL-STATIC,value=0,1,0
+12A,5,GLOBAL-STATIC,value=10,1,0
+12A,6,GLOBAL-STATIC,value=0,1,0
+12D,4,EXPLAINED-BY:wheel_front,r=+0.999 (wheel_front@decay-mark/off),170,2
+12E,0,GLOBAL-STATIC,value=0,1,0
+12E,1,GLOBAL-STATIC,value=0,1,0
+12E,2,GLOBAL-STATIC,value=0,1,0
+12E,3,GLOBAL-STATIC,value=0,1,0
+12E,4,GLOBAL-STATIC,value=0,1,0
+12E,5,GLOBAL-STATIC,value=0,1,0
+12E,6,UNEXPLAINED-ACTIVE,moves in 6/14 sessions; no ref correlation,2,6
+450,0,GLOBAL-STATIC,value=0,1,0
+450,1,GLOBAL-STATIC,value=0,1,0
+450,2,GLOBAL-STATIC,value=0,1,0
+450,3,GLOBAL-STATIC,value=0,1,0
+450,4,GLOBAL-STATIC,value=0,1,0
+450,5,GLOBAL-STATIC,value=0,1,0
+450,6,GLOBAL-STATIC,value=40,1,0
+540,0,GLOBAL-STATIC,value=0,1,0
+540,2,UNEXPLAINED-ACTIVE,moves in 5/14 sessions; no ref correlation,2,5
+540,3,UNEXPLAINED-ACTIVE,moves in 6/14 sessions; no ref correlation,4,6
+540,4,GLOBAL-STATIC,value=0,1,0
+541,0,GLOBAL-STATIC,value=0,1,0
+541,1,INSUFFICIENT-DATA,moved only in: throttle,2,1
+541,2,UNEXPLAINED-ACTIVE,moves in 5/14 sessions; no ref correlation,2,5
+541,3,GLOBAL-STATIC,value=0,1,0
+541,5,UNEXPLAINED-ACTIVE,moves in 6/14 sessions; best r=+0.307 (wheel_front),14,6
+541,6,UNEXPLAINED-ACTIVE,moves in 14/14 sessions; best r=+0.504 (wheel_front),256,14
+5A0,0,GLOBAL-STATIC,value=0,1,0
+5A0,1,GLOBAL-STATIC,value=0,1,0
+5A0,2,GLOBAL-STATIC,value=0,1,0
+5A0,3,GLOBAL-STATIC,value=0,1,0
+5A0,4,UNEXPLAINED-ACTIVE,moves in 6/14 sessions; no ref correlation,2,6
+5A0,5,GLOBAL-STATIC,value=0,1,0
+5A0,6,GLOBAL-STATIC,value=0,1,0
+5B0,0,INSUFFICIENT-DATA,moved only in: kill,2,1
+5B0,1,GLOBAL-STATIC,value=0,1,0
+5B0,2,GLOBAL-STATIC,value=0,1,0
+5B0,3,GLOBAL-STATIC,value=0,1,0
+5B0,4,GLOBAL-STATIC,value=0,1,0
+5B0,5,GLOBAL-STATIC,value=0,1,0
+5B0,6,GLOBAL-STATIC,value=0,1,0

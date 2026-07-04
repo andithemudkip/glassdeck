@@ -16,7 +16,8 @@ Bike diagnostic connector          SN65HVD230 breakout              ESP32-S3
                     │                  3V3  ◄─────────┼──────────── 3V3
                     │                  CTX  ◄──────────────────────  GPIO4 (TWAI TX)
                     │                  CRX  ──────────────────────►  GPIO5 (TWAI RX)
-  pin 4  F7  ─ ─ ─ ─┘ (not wired — USB-powered during development, see ADR 0001)
+  pin 4  F7  ────────►   500 mA fuse → 1N5819 → 470 µF/63 V cap → LM2596 buck (pre-set 5V) → 5V pin
+                          (see [ADR 0015](../decisions/0015-f7-12v-power-path.md) and [f7-power.md](f7-power.md))
 ```
 
 ## Bike-side connector
@@ -28,7 +29,7 @@ Bike-side pin assignments live in [diagnostic-connector.md](diagnostic-connector
 | 2 | CANH | SN65HVD230 pin 7 |
 | 5 | CANL | SN65HVD230 pin 6 |
 | 3 | GND  | Adapter ground rail |
-| 4 | +12V switched | Not connected during development — see [ADR 0001](../decisions/0001-usb-power-during-development.md) |
+| 4 | +12V switched | F7 power chain (fuse + Schottky + bulk cap + buck → 5V pin) — see [f7-power.md](f7-power.md) and [ADR 0015](../decisions/0015-f7-12v-power-path.md). Supersedes [ADR 0001](../decisions/0001-usb-power-during-development.md). |
 
 ## SN65HVD230 breakout board (3.3V CAN transceiver)
 
@@ -64,10 +65,10 @@ Board: ESP32-S3-DevKitC-1 — see [bom.md](bom.md).
 | GPIO5 | Breakout CRX | TWAI controller RX. Locked by [ADR 0002](../decisions/0002-twai-gpio-assignment.md). |
 | 3V3 | Breakout 3V3 | Transceiver power. |
 | GND | Breakout GND + diagnostic pin 3 | Single common ground. |
-| USB | Laptop / USB battery | Power during development per [ADR 0001](../decisions/0001-usb-power-during-development.md). |
+| USB | Laptop / USB battery | Desk dev only — flashing and USB-CDC. For untethered/test-ride use, power comes from F7 via the chain in [f7-power.md](f7-power.md) per [ADR 0015](../decisions/0015-f7-12v-power-path.md). **USB and F7 must not be connected simultaneously** — see f7-power.md § Operational rules. |
 
 ## Open items
 
 - [ ] Confirm CAN bitrate by capture (hypothesis: 500 kbps).
 - [ ] Confirm first capture works with the breakout's on-board termination in place; remove it only if traffic is bad.
-- [ ] 12V power path for mounted test rides — deferred per ADR 0001.
+- [x] ~~12V power path for mounted test rides — deferred per ADR 0001.~~ Specced 2026-06-25 in [ADR 0015](../decisions/0015-f7-12v-power-path.md) + [f7-power.md](f7-power.md); bench-test and first bike-on test pending.

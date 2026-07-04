@@ -1,7 +1,7 @@
 # 0001 — USB-power the adapter during development; 12V only for test rides
 
 **Date:** 2026-06-15
-**Status:** Accepted
+**Status:** Superseded by [ADR 0015](0015-f7-12v-power-path.md) (2026-06-25)
 
 ## Context
 

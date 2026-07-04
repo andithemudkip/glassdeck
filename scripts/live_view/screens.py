@@ -158,9 +158,9 @@ class OperatorScreen(Screen):
     CSS = """
     OperatorScreen { layout: vertical; }
     #op-header    { height: 1; padding: 0 2; }
-    #op-prompt    { height: 9; content-align: center middle; border: round blue; margin: 0 2; padding: 1 2; }
-    #op-digits    { height: 5; content-align: center middle; color: $text-muted; }
-    #op-now       { height: 3; content-align: center middle; }
+    #op-prompt    { height: 9; content-align: center middle; text-align: center; border: round blue; margin: 0 2; padding: 1 2; }
+    #op-digits    { height: 5; content-align: center middle; text-align: center; color: $text-muted; }
+    #op-now       { height: 3; content-align: center middle; text-align: center; }
     #op-flash     { height: 1; padding: 0 4; }
     #op-preview   { height: 5; padding: 0 4; }
     #op-help      { height: 1; padding: 0 2; }
@@ -235,26 +235,21 @@ class OperatorScreen(Screen):
         focus_step = next_step if (countdown_active and next_step is not None) else step
         focus_is_upcoming = countdown_active and next_step is not None
 
-        # --- header: step counter + progress bar + rep counter ----------
+        # --- header: step counter + progress bar ------------------------
+        # Bar shows steps completed, not started — at step 1 of N the rider
+        # has done 0 work, so the bar is empty; it fills as steps finish.
         bar_len = 20
-        filled = int(bar_len * (i + 1) / n_total)
+        filled = int(bar_len * i / n_total)
         bar = "█" * filled + "░" * (bar_len - filled)
-        # Rep counter follows the focus_step so it tracks the prompt's loop
-        # context even during the cross-fade into a new repeat block.
-        rep_chunk = ""
-        rep_step = focus_step
-        if rep_step.iter is not None and rep_step.loop_count is not None:
-            noun = (
-                rep_step.mark.key.upper() if rep_step.mark and rep_step.mark.key else "REP"
-            )
-            rep_chunk = (
-                f"  │  [bold cyan]{noun} {rep_step.iter} of {rep_step.loop_count}[/bold cyan]"
-            )
         self.query_one("#op-header", Static).update(
-            f"[bold]STEP {i + 1} of {n_total}[/bold]   {bar}{rep_chunk}"
+            f"[bold]STEP {i + 1} of {n_total}[/bold]   {bar}"
         )
 
         # --- big prompt --------------------------------------------------
+        # Rep counter rides under the prompt: for a 5×throttle loop, "which
+        # rep am I on" is the rider's main orienting cue and needs to be in
+        # the same eye-line as the action text, not buried in the header.
+        # Follows focus_step so it tracks loop context across the cross-fade.
         prefix = ""
         if mode == "ready":
             prefix = "[bold yellow]GET READY[/bold yellow]\n"
@@ -264,8 +259,18 @@ class OperatorScreen(Screen):
             # Defensive fallback — focus is upcoming but we're not in ready
             # mode. Shouldn't trigger today but keep the prompt honest.
             prefix = "[bold]NEXT[/bold]\n"
+        rep_suffix = ""
+        if focus_step.iter is not None and focus_step.loop_count is not None:
+            noun = (
+                focus_step.mark.key.upper()
+                if focus_step.mark and focus_step.mark.key
+                else "REP"
+            )
+            rep_suffix = (
+                f"\n[bold cyan]{noun} {focus_step.iter} of {focus_step.loop_count}[/bold cyan]"
+            )
         self.query_one("#op-prompt", Static).update(
-            f"{prefix}[bold]{focus_step.prompt}[/bold]"
+            f"{prefix}[bold]{focus_step.prompt}[/bold]{rep_suffix}"
         )
 
         # --- giant countdown digits + NOW banner ------------------------
@@ -287,19 +292,28 @@ class OperatorScreen(Screen):
         else:
             digits.update("")
             if remaining is not None and remaining > 0:
-                now_label.update(f"[dim]{remaining:.0f}s[/dim]")
+                # Label disambiguates the rest-state countdown from the giant
+                # ready-mode digits above. "hold" for action steps still in
+                # progress past the ACT highlight; "settle" otherwise.
+                label = "hold" if step.mark is not None else "settle"
+                now_label.update(f"[dim]{label} · {remaining:.0f}s[/dim]")
             else:
                 now_label.update("")
 
-        # --- mark-fired flash -------------------------------------------
-        flash_text = ""
+        # --- mark-fired / skip flash -----------------------------------
+        # Both fade after MARK_FLASH_SECS; whichever fired more recently wins.
+        now = time.monotonic()
+        candidates: list[tuple[float, str]] = []
         last = app._last_mark
-        if last is not None:
-            ts, key, label = last
-            age = time.monotonic() - ts
-            if age < MARK_FLASH_SECS:
-                shown = label if label else key
-                flash_text = f"[bold green]✓ marked:[/bold green] {shown}"
+        if last is not None and (now - last[0]) < MARK_FLASH_SECS:
+            shown = last[2] if last[2] else last[1]
+            candidates.append((last[0], f"[bold green]✓ marked:[/bold green] {shown}"))
+        last_skip = app._last_skip
+        if last_skip is not None and (now - last_skip[0]) < MARK_FLASH_SECS:
+            candidates.append(
+                (last_skip[0], f"[bold yellow]⤳ skipped:[/bold yellow] {last_skip[1]}")
+            )
+        flash_text = max(candidates, key=lambda c: c[0])[1] if candidates else ""
         self.query_one("#op-flash", Static).update(flash_text)
 
         # --- preview -----------------------------------------------------
@@ -321,7 +335,7 @@ class OperatorScreen(Screen):
         self.query_one("#op-preview", Static).update("\n".join(preview_lines))
 
         self.query_one("#op-help", Static).update(
-            "[dim]Tab: analysis view   Space: pause   ←: prev step   q: quit[/dim]"
+            "[dim]Tab: analysis view   Space: pause   ←/→: prev/skip step   q: quit[/dim]"
         )
 
         self.query_one("#op-status", Static).update(

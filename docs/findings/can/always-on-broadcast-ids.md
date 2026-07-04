@@ -4,6 +4,8 @@ status: confirmed
 established_by:
   - 2026-06-17-key-on-cold-boot
   - 2026-06-17-engine-idle-baseline-x3
+  - 2026-06-21-cold-boot-id-emergence
+  - 2026-06-26-fuel-consumption-broadcast-hunt
 ---
 
 # Always-on broadcast IDs
@@ -36,7 +38,7 @@ Both were confirmed by cross-referencing the [ktm-can decoder](../../references/
 
 The 11 IDs do **not** stop broadcasting uniformly after kill, and they do **not** all appear at boot at the same time. The combined analysis — Fast/Slow decay split plus three distinct Slow-group boot waves — puts the bus at ≥4 source modules. See [[post-kill-decay-groups]] for the sub-grouping table.
 
-**The 11 always-on IDs are the complete bus inventory at idle.** Across all 4 cold-boot windows checked ([[2026-06-21-cold-boot-id-emergence]]), zero one-shot or boot-only IDs appeared — no module emits a "hello" frame and goes silent. Any new ID surfaced by a future per-input capture is genuinely input-driven, not an undocumented boot frame.
+**The 11 always-on IDs are the complete bus inventory across every captured condition.** Across all 4 cold-boot windows checked ([[2026-06-21-cold-boot-id-emergence]]), zero one-shot or boot-only IDs appeared — no module emits a "hello" frame and goes silent. A bus-wide arbitration-ID sweep during [[2026-06-26-fuel-consumption-broadcast-hunt]] strengthens this further: **0 / 800 679 frames across 14 sessions** carry any ID outside this set — no UDS request (`0x7DF`, `0x7E0..0x7EF`), no diagnostic band (`0x600..0x6FF`), no 29-bit extended frame. Coverage spans cold boot, idle (cold / warm / hot), full RPM sweep, post-kill decay, gear cycling, clutch, kill toggle, side-stand toggle, throttle sweep engine-off, wheel-spin engine-off, wheel-spin engine-on, and shift-lever-vs-clutch. **Diagnostic / UDS traffic is not in use on this bike** — the OEM dash does not poll the ECU. Any new ID surfaced by a future per-input capture is genuinely input-driven.
 
 ## Status
 

@@ -2,18 +2,20 @@
 
 Bike: 2020 Husqvarna Svartpilen 401.
 
-| Pin | Label | Wire colors | Function |
-|-----|-------|-------------|----------|
-| 2   | CH    | green / blue    | CAN Bus High |
-| 3   | GD    | blue / yellow   | Ground |
-| 4   | F7    | grey / pink     | Power (switched, key-on) |
-| 5   | CL    | yellow / blue   | CAN Bus Low |
+| Pin | Label | Schematic code | Colour           | Function |
+|-----|-------|----------------|------------------|----------|
+| 2   | CH    | gn-bu          | green / blue     | CAN Bus High |
+| 3   | GD    | bl-ye          | black / yellow   | Ground |
+| 4   | F7    | gr-pk          | grey / pink      | Power (switched, key-on) |
+| 5   | CL    | ye-bu          | yellow / blue    | CAN Bus Low |
 
 Pins 1 and 6 are not used for the listen-only adapter.
 
+Colour codes cross-checked against the manual's own legend on page 341 of the wiring diagrams — see `dash-connector.md` for the full legend. Note: `bl = Black`, `bu = Blue`. The original user-supplied pinout described pin 3 as "blue / yellow", which is a colour-code ambiguity — the wire is black / yellow per the schematic. Same wire, corrected label.
+
 ## Source
 
-User-supplied, 2026-06-15. Treat as confirmed for wiring purposes; verify continuity with a multimeter before connecting the transceiver.
+User-supplied 2026-06-15; wire colours cross-checked against the repair manual wiring diagram 2026-07-01. The schematic (page 8 of the wiring diagrams, connector X295 designated QM/6) confirms the pinout and wire routing. Verify continuity with a multimeter before connecting the transceiver.
 
 ## Wiring to the listen-only adapter
 
