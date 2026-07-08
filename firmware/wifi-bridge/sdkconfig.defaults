@@ -1,0 +1,52 @@
+# Route stdio to the built-in USB-Serial/JTAG controller (the port labelled USB
+# on the DevKitC-1). Same as can-logger — this is where the milestone 1 SLCAN
+# bench-check stream comes out; later milestones add WebSocket as the primary
+# egress and USB-CDC becomes purely diagnostic.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED=y
+
+# Intentional divergence from can-logger: IDF log levels are NOT muted here.
+# USB-CDC on wifi-bridge is a diagnostic surface, not the data pipe — visible
+# boot logs (IDF version, PSRAM init, task startup) are the point. The SLCAN
+# bench-check stream that follows is parser-tolerant to non-t/T/r/R lines.
+
+# Match the DevKitC-1 N8/N16 module's actual flash size. Default 2 MB
+# would refuse to flash on these modules.
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+
+# Custom OTA-capable partition table is selected via `board_build.partitions`
+# in platformio.ini — that's the PlatformIO ESP-IDF entry point. Setting
+# CONFIG_PARTITION_TABLE_CUSTOM here directly is silently ignored under PIO.
+
+# PSRAM — WROOM-1-N16R8 module has 8 MB octal PSRAM. Enabled now so the
+# milestone 4 ring buffer allocation can rely on it; also lets the boot header
+# report the total right away as a bring-up sanity check.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+
+# Slightly larger main task stack — the SLCAN format buffer + printf headroom
+# is comfortable here without being wasteful. Same as can-logger.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=4096
+
+# --- WiFi + HTTP server (milestone 2) -----------------------------------------
+
+# WiFi. Already default y on ESP32-S3 (SOC_WIFI_SUPPORTED=y), but source-tracked
+# here so the intent is visible without menuconfig spelunking.
+CONFIG_ESP_WIFI_ENABLED=y
+
+# HTTP server WebSocket surface. Milestone 2 doesn't use it directly, but
+# enabling it now means httpd_uri_t exposes .is_websocket / .handle_ws_control_
+# frames / .supported_subprotocol from the outset — milestone 3 flips one field
+# to turn /stream on without a Kconfig churn.
+CONFIG_HTTPD_WS_SUPPORT=y
+
+# --- OTA rollback -------------------------------------------------------------
+
+# Bootloader-side rollback: if the app doesn't call
+# esp_ota_mark_app_valid_cancel_rollback() before it crashes/resets, the next
+# boot reverts to the previous OTA slot. app_main marks valid after WiFi + HTTP
+# are up (see main.c) — anything more subtle that breaks post-boot can OTA its
+# way out, anything that can't reach that point auto-recovers.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

@@ -1,8 +1,21 @@
 # 0016 — Dev-phase WiFi capture and live view
 
 **Date:** 2026-06-25
-**Status:** Accepted
+**Status:** Accepted (§ Retirement amended 2026-07-05 — see Update below)
 **Relates to:** [ADR 0014](0014-dashboard-bridge-firmware.md) (production BLE bridge, deferred behind this ADR)
+
+## Update 2026-07-05 — retirement clause reopened
+
+The original § Retirement below assumes `firmware/wifi-bridge/` is deleted the moment ADR 0014's BLE bridge ships. That commitment is walked back: the delete-when-BLE-ships plan is no longer settled. WiFi + browser has real long-term value the BLE bridge can't cheaply replicate:
+
+- **Post-ride log pull.** BLE at the 1M PHY can't pump a full ride's ring buffer off the ESP in seconds. HTTP over WiFi can.
+- **Diagnostic mode for the production dashboard.** A browser-served page any laptop or phone can hit — no native app, no BLE dance — is the cheapest possible field-debug surface.
+- **Fallback if BLE fails.** BLE stacks fail in the field in ways that are hard to predict from bench testing. A parallel WiFi ingress is insurance.
+- **Codegen path already exists.** Once milestone 6 of the build ships the `signals.yaml` → JS decoder, keeping the WiFi target alive costs only occasional maintenance, not new mechanism.
+
+The actual decision — retire vs. keep as a sidecar — is deferred to a follow-up ADR near ADR 0014 shipping, when we can weigh what BLE is actually delivering against what the WiFi target still provides. Nothing in the rest of this ADR changes; the build plan in [`firmware/wifi-bridge/README.md`](../../firmware/wifi-bridge/README.md) treats retirement as an open question rather than a locked outcome.
+
+The § Retirement section below is preserved as originally written.
 
 ## Context
 
@@ -77,6 +90,8 @@ The decoded panel reads from `signals.yaml` via a small TypeScript/JS module gen
 - **Session marking.** The live view exposes a "mark" button that calls `POST /mark?label=<text>` to insert a `# MARK <label>` line into the capture, replacing the laptop-side keyboard hotkeys for ride sessions where the rider can press a phone button but not a laptop key. Compatible with the existing `m`-mark machinery in `scripts/capture.py`. (Hand-driven inputs that can't be marked — see [[experiment-design-hand-driven-marks]] — still need procedure-driven step boundaries, but for two-handed actions like opening throttle or hitting the kill switch, on-phone marks are now possible.)
 
 ### Retirement
+
+*Amended 2026-07-05 — see the Update at the top of this ADR. The delete-when-BLE-ships plan below is no longer settled; the actual decision is deferred to a follow-up ADR near ADR 0014 shipping. Original text preserved below.*
 
 When [ADR 0014](0014-dashboard-bridge-firmware.md) ships, this firmware target is deleted. The `firmware/wifi-bridge/` directory is removed; ADR 0014's BLE bridge becomes the sole untethered egress for the production rig. This ADR stays on file as the historical dev tool.
 

@@ -64,7 +64,7 @@ This build is hand-assembled on perfboard, so the picks below are **through-hole
 
 | Part | Specifics | Purpose | Approx. cost |
 |------|-----------|---------|--------------|
-| **LM2596 buck module** | Adjustable buck, 4–40 V input, 3 A capable, on-board output pot. Available at every Romanian hobby shop (Optimus Digital, Cleste, Sigmanortec, Robofun) and AliExpress. Through-hole pins or screw terminals. **Must be pre-set to 5.00 V with a multimeter before connecting anything downstream** — see § Operational rules. | 12V → 5V step-down | €1–3 |
+| **LM2596 buck module** | 4–40 V input, 3 A capable. Available at every Romanian hobby shop (Optimus Digital, Cleste, Sigmanortec, Robofun) and AliExpress. Through-hole pins or screw terminals. Two variants exist: **adjustable** (on-board pot — **must be pre-set to 5.00 V with a multimeter before connecting anything downstream**, see § Operational rules) and **fixed 5 V** (no pot — drop-in, no adjust step). Either works; fixed-5V removes the pot-drift-on-vibration failure mode for free. | 12V → 5V step-down | €1–3 |
 | **1N5819 Schottky diode** | 40 V, 1 A, DO-41 axial. ~0.4 V drop at 500 mA. (SMD equivalent: SS14 in DO-214AC. Interchangeable hobbyist parts: SB140, MBR140 — same 40 V / 1 A / DO-41 spec.) | Reverse-polarity protection | <$1 |
 | **470 µF / 63 V radial electrolytic** | Aluminum electrolytic, polarised, radial leaded. Voltage rating ≥50 V required; 63 V gives comfortable headroom. Capacitance can be 220–1000 µF without consequence; 470 µF is the sweet spot for size vs. energy absorption. **Watch polarity** — the striped lead is negative. | Bulk transient absorption | €0.50 |
 | *Upgrade alternatives: MOV / TVS / SCR crowbar* | See § Transient protection tradeoff. | Dedicated clamp (none of these are in the build-now BOM) | — |
@@ -152,7 +152,7 @@ Before connecting to the bike. Bench supply or a 12V battery is fine.
 
 ### Test 1 — naked buck
 
-Disconnect the DevKitC-1. **Pre-set the buck's output pot to 5.00 V before installing it on the board, per § Operational rules.** Apply 12 V to the F7 input. Measure:
+Disconnect the DevKitC-1. **If using the adjustable variant, pre-set the output pot to 5.00 V before installing it on the board, per § Operational rules.** (Fixed-5V modules skip this — the check below still applies.) Apply 12 V to the F7 input. Measure:
 
 - **5V_out:** 4.95–5.05 V with no load. If you see 0 V, the buck is dead or installed wrong. If you see 12 V or any voltage above ~5.5 V, the pot wasn't pre-adjusted (or the buck failed short) — **disconnect immediately**, the next step would have killed the ESP32. Re-adjust on the bench before continuing.
 - **Current draw from 12 V:** <20 mA (the buck's own quiescent). If you see >100 mA, something downstream of the 5V rail is shorting or the buck is faulty.
@@ -193,7 +193,7 @@ After all bench tests pass:
 
 ## Operational rules
 
-- **Pre-adjust the buck's output to 5.00 V before connecting the ESP32.** LM2596 / MP1584 modules ship with the output pot at an arbitrary position — often 12 V or higher. Procedure: apply 12 V to the buck's input on the bench, measure VOUT with a multimeter, turn the pot (small screwdriver, usually 10+ turns) until the output reads 5.00 V (±50 mV). Then lock the pot with a dab of nail polish, clear epoxy, or hot glue so vibration on the bike can't shift it. **Do this with the ESP32 disconnected.** Plugging an ESP32 into a buck still configured for 12 V output kills it immediately.
+- **Pre-adjust the buck's output to 5.00 V before connecting the ESP32 (adjustable variant only).** Adjustable LM2596 / MP1584 modules ship with the output pot at an arbitrary position — often 12 V or higher. Procedure: apply 12 V to the buck's input on the bench, measure VOUT with a multimeter, turn the pot (small screwdriver, usually 10+ turns) until the output reads 5.00 V (±50 mV). Then lock the pot with a dab of nail polish, clear epoxy, or hot glue so vibration on the bike can't shift it. **Do this with the ESP32 disconnected.** Plugging an ESP32 into a buck still configured for 12 V output kills it immediately. Fixed-5V modules have no pot and skip this step — still verify VOUT with a multimeter (Test 1) before wiring downstream.
 - **USB and F7 are not simultaneous.** The DevKitC-1's USB VBUS feeds the same 5V rail through a protection diode. Connecting both is electrically safe but creates a backfeed path the buck regulates against. **For flashing or USB-CDC dev, unplug F7. For ride captures, unplug USB.** A piece of tape over whichever port isn't in use is the simplest enforcement until a switch is added.
 - **The fuse is the only sacrificial element.** If the rig stops powering up after a fault, check the fuse before assuming a deeper problem. Carry a spare in the toolkit.
 - **Bike pin 3 (GD) is the only ground reference.** Do not chassis-ground the adapter to the frame or to an unrelated harness ground point — pin 3 is what the ECU references.

@@ -291,7 +291,16 @@ def write_session_stub(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--port", required=True, help="ESP32 USB-CDC port (e.g. /dev/tty.usbmodem101)")
+    parser.add_argument("--port", default=None, help="ESP32 USB-CDC port (e.g. /dev/tty.usbmodem101). Mutually exclusive with --stdin.")
+    parser.add_argument(
+        "--stdin",
+        action="store_true",
+        help="Read SLCAN from stdin instead of a serial port. Intended for "
+             "`websocat -n ws://<esp>/stream | capture.py --stdin --label <lbl>`. "
+             "Incompatible with --live / --watch / --experiment (they need stdin "
+             "for hotkeys). No silence-warn diagnostic — SLCAN reception depends "
+             "on whatever produced the stdin bytes, out of our control.",
+    )
     parser.add_argument("--label", default="capture", help="Session label (becomes part of logs/<date>-<label>/)")
     parser.add_argument("--bitrate", type=int, default=500_000, help="CAN bitrate in bps (must match firmware build)")
     parser.add_argument(
@@ -405,6 +414,16 @@ def main() -> int:
     if args.watch and not args.live:
         args.live = True
 
+    # --stdin / --port validation. Exactly one must be set; --stdin is
+    # incompatible with any mode that consumes stdin for keystrokes.
+    if args.stdin and args.port:
+        sys.exit("--stdin and --port are mutually exclusive.")
+    if not args.stdin and not args.port:
+        sys.exit("either --port <device> or --stdin is required.")
+    if args.stdin and (args.live or args.watch or args.experiment):
+        sys.exit("--stdin is incompatible with --live / --watch / --experiment "
+                 "(those modes need stdin for keystrokes).")
+
     try:
         import can
     except ImportError:
@@ -412,13 +431,14 @@ def main() -> int:
             "python-can is not installed.\n"
             "  pip install -r scripts/requirements.txt"
         )
-    try:
-        import serial
-    except ImportError:
-        sys.exit(
-            "pyserial is not installed.\n"
-            "  pip install -r scripts/requirements.txt"
-        )
+    if not args.stdin:
+        try:
+            import serial
+        except ImportError:
+            sys.exit(
+                "pyserial is not installed.\n"
+                "  pip install -r scripts/requirements.txt"
+            )
 
     if args.watch:
         session_dir = None
@@ -449,8 +469,12 @@ def main() -> int:
         sys.stderr.write("watch mode: no logs will be written.\n")
     else:
         sys.stderr.write(f"capture session: {session_dir}\n")
-    sys.stderr.write(f"port: {args.port}   bitrate: {args.bitrate} bps   firmware: {fw_rev or 'unknown'}\n")
-    sys.stderr.write("press '?' for hotkey legend, 'q' or Ctrl-C to stop.\n\n")
+    source = "stdin" if args.stdin else args.port
+    sys.stderr.write(f"source: {source}   bitrate: {args.bitrate} bps   firmware: {fw_rev or 'unknown'}\n")
+    if args.stdin:
+        sys.stderr.write("stdin mode: hotkeys disabled. Ctrl-C or EOF to stop.\n\n")
+    else:
+        sys.stderr.write("press '?' for hotkey legend, 'q' or Ctrl-C to stop.\n\n")
 
     events: EventLogger | NullEventLogger
     if args.watch:
@@ -468,18 +492,20 @@ def main() -> int:
     silence_warned = False
     last_status = 0.0
 
-    try:
-        # USB-CDC ignores baudrate; pyserial still needs a value. 1 s read
-        # timeout matches the original bus.recv() cadence so the status line
-        # ticks and the stop flag is checked at least once per second.
-        ser = serial.Serial(args.port, baudrate=115200, timeout=1.0)
-    except KeyboardInterrupt:
-        events.close()
-        sys.stderr.write("\naborted before capture started.\n")
-        return 1
-    except (serial.SerialException, OSError) as e:
-        events.close()
-        sys.exit(f"failed to open serial port {args.port}: {e}")
+    ser = None
+    if not args.stdin:
+        try:
+            # USB-CDC ignores baudrate; pyserial still needs a value. 1 s read
+            # timeout matches the original bus.recv() cadence so the status line
+            # ticks and the stop flag is checked at least once per second.
+            ser = serial.Serial(args.port, baudrate=115200, timeout=1.0)
+        except KeyboardInterrupt:
+            events.close()
+            sys.stderr.write("\naborted before capture started.\n")
+            return 1
+        except (serial.SerialException, OSError) as e:
+            events.close()
+            sys.exit(f"failed to open serial port {args.port}: {e}")
 
     if args.watch:
         writer = _NullCanLogger()
@@ -499,14 +525,28 @@ def main() -> int:
         nonlocal total_frames, silence_warned, last_status
         try:
             while not stop.is_set():
-                try:
-                    line = ser.read_until(b"\r", size=SLCAN_MAX_LINE)
-                except (serial.SerialException, OSError) as e:
-                    sys.stderr.write(f"\nbus disconnected: {e}\n")
-                    events.log("disconnect", f"{type(e).__name__}: {e}")
-                    stop.set()
-                    break
-                if line.endswith(b"\r"):
+                if args.stdin:
+                    # readline() splits on \n and returns b'' on EOF. Producers
+                    # like `websocat -n` emit one payload per line with a
+                    # trailing \n; the SLCAN line itself ends in \r, which the
+                    # parser tolerates via the strip() at the top of
+                    # parse_slcan_line.
+                    line = sys.stdin.buffer.readline()
+                    if not line:
+                        stop.set()
+                        break
+                    ready = True
+                else:
+                    try:
+                        line = ser.read_until(b"\r", size=SLCAN_MAX_LINE)
+                    except (serial.SerialException, OSError) as e:
+                        sys.stderr.write(f"\nbus disconnected: {e}\n")
+                        events.log("disconnect", f"{type(e).__name__}: {e}")
+                        stop.set()
+                        break
+                    ready = line.endswith(b"\r")
+
+                if ready:
                     ts = time.time()
                     msg = parse_slcan_line(line, ts)
                     if msg is not None:
@@ -519,7 +559,9 @@ def main() -> int:
                 now = time.monotonic()
                 elapsed = now - start_time
 
-                if not silence_warned and total_frames == 0 and elapsed > args.silence_warn_secs:
+                # Silence warn is a serial-mode diagnostic — the checklist
+                # (right port, continuity, bitrate) doesn't apply to stdin.
+                if not args.stdin and not silence_warned and total_frames == 0 and elapsed > args.silence_warn_secs:
                     if on_silence_cb is not None:
                         on_silence_cb(elapsed)
                     silence_warned = True
@@ -558,7 +600,10 @@ def main() -> int:
         sys.stderr.flush()
 
     try:
-        if args.live:
+        if args.stdin:
+            # No KeyReader — stdin is consumed for data, not keystrokes.
+            capture_loop(on_status_cb=write_status_line)
+        elif args.live:
             # Live mode: Textual owns the terminal + input; capture loop
             # runs in a worker thread, frames cross via LiveBridge.
             from live_view import LiveBridge, LiveView  # type: ignore
@@ -612,10 +657,11 @@ def main() -> int:
             writer.stop()
         except Exception:
             pass
-        try:
-            ser.close()
-        except Exception:
-            pass
+        if ser is not None:
+            try:
+                ser.close()
+            except Exception:
+                pass
         events.close()
 
     end_iso = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")

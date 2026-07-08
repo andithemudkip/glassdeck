@@ -2,10 +2,17 @@
 
 ESP32 firmware. Subprojects appear here as they're built:
 
-- `can-logger/` — Phase 1 listen-only CAN logger (microSD or serial out)
-- `dashboard/` — Phase 3+ dashboard application
+- `can-logger/` — Phase 1 listen-only CAN logger, SLCAN over USB-CDC.
+- `wifi-bridge/` — Phase 2+ untethered capture + browser-served live view. WiFi soft-AP, HTTP `GET /health`, OTA-capable partition table with `POST /ota` (rollback enabled) — iterate over WiFi, no need to unplug USB. See [ADR 0016](../docs/decisions/0016-wifi-dev-capture-and-live-view.md) and `wifi-bridge/README.md` for milestones.
+- `dashboard/` — Phase 3+ dashboard application (not yet started).
 
 Each subproject is self-contained: its own `platformio.ini` / `CMakeLists.txt` / build config, its own README describing how to flash and run.
+
+Shared code lives in `lib/`, consumed by subprojects via ESP-IDF's `EXTRA_COMPONENT_DIRS` mechanism (set in each subproject's top-level `CMakeLists.txt`):
+
+- `lib/twai/` — TWAI (CAN) driver ownership: listen-only init, receive wrapper, health-counter accessor. Consumed by `can-logger/` and `wifi-bridge/`.
+- `lib/slcan/` — SLCAN (Lawicel ASCII) frame formatter. Consumed by `can-logger/` and `wifi-bridge/`.
+- `lib/status_led/` — WS2812 on-board pixel with a state model (boot / CAN-only / wifi-no-client / wifi-client / error) and a CAN-RX pulse overlay. Colors are independent surfaces: base color = which services are up, brief green flashes = frames arriving. Consumed by `can-logger/` and `wifi-bridge/`.
 
 ## Hard rules
 

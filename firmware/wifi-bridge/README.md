@@ -4,7 +4,7 @@ Phase 2+ untethered CAN capture + browser-served live view for the 2020 Husqvarn
 
 Reads frames off the bike's CAN bus, streams them out over WiFi as SLCAN over WebSocket, and serves a static browser page that decodes them live. Replaces the USB tether for ride captures; `can-logger/` stays alive as the desk USB-CDC path.
 
-**Status:** not built yet — this README is the build plan. See § Milestones for what's staged and where we are.
+**Status:** milestones 1–3 code-complete (compile-verified, bench check pending hardware plug-in). See § Milestones for what's staged and where we are, § Current state for the next step.
 
 ## Goal
 
@@ -23,29 +23,35 @@ Golden no-TX rule applies. `TWAI_MODE_LISTEN_ONLY` at boot, no compile-time TX o
 
 Ordered so each step is independently verifiable. USB-powered at the desk is fine until milestone 4 — power source is transparent to everything above the TWAI driver.
 
-### 1 — Scaffold + TWAI reader
+### 1 — Scaffold + shared TWAI lib
 
-- [ ] `platformio.ini` targeting the S3-DevKitC-1 with the same ESP-IDF version `can-logger/` uses.
-- [ ] Lift the TWAI init + read loop out of `can-logger/main/` into shared code. ADR 0016 mentions `firmware/lib/`; either place it there now or fork-and-clean-up later — decide when we start, don't pre-commit here.
-- [ ] Boot logs the SDK version, TWAI state, and PSRAM size on USB-CDC so bench bring-up looks the same as `can-logger/`.
+- [x] Extract the TWAI init + read loop from `can-logger/main/` into `firmware/lib/twai/` — shared code both targets depend on. `can-logger/` migrates to consume the lib in the same change, no functional change to its behavior.
+- [x] Extract SLCAN formatter into `firmware/lib/slcan/` alongside — added mid-milestone to avoid duplicate `format_slcan()` copies once wifi-bridge also emits SLCAN.
+- [x] `platformio.ini` for `wifi-bridge/` targeting the S3-DevKitC-1 with the same ESP-IDF version `can-logger/` uses; consumes `firmware/lib/twai/`.
+- [x] Boot logs the SDK version, TWAI state, and PSRAM size on USB-CDC. Intentional divergence from `can-logger/`: bridge USB-CDC isn't a data pipe, so logs are visible (no `_LOG_LEVEL_WARN` muting).
 
-**Done when:** flashing the target reads frames off the bike and prints SLCAN to USB-CDC, exactly like `can-logger/` does today. Proves the TWAI half in isolation.
+**Done when:** flashing the target reads frames off the bike and prints SLCAN to USB-CDC, exactly like `can-logger/` does today, *and* `can-logger/` still passes its bench check on the same bike after the lib extraction. Proves the TWAI half in isolation and that the extraction didn't regress the existing logger.
 
-### 2 — WiFi AP + `/health`
+**Status:** builds pass for both `can-logger` (500k + 250k envs) and `wifi-bridge`. Bench check against the bike deferred to a milestone 2/3 end-to-end run.
 
-- [ ] AP mode, SSID `bike-dash-<lower6 of MAC>`, WPA2 password from `main/wifi_secrets.h` (with `.example` in-tree, real file `.gitignore`'d).
-- [ ] Boot prints the SSID + password + IP to USB-CDC.
-- [ ] HTTP server up at `192.168.4.1`, single route: `GET /health` returning JSON with uptime, TWAI state, frames-seen counter, WiFi RSSI of connected client.
+### 2 — WiFi AP + `/health` + OTA update endpoint
 
-**Done when:** phone joins the AP, `curl 192.168.4.1/health` from the laptop on the same AP returns sensible JSON, TWAI counter increments while bike is on.
+- [x] AP mode, SSID `bike-dash-<lower6 of MAC>`, WPA2 password from `main/wifi_secrets.h` (with `.example` in-tree, real file `.gitignore`'d).
+- [x] Boot prints the SSID + password + IP to USB-CDC.
+- [x] HTTP server up at `192.168.4.1`, `GET /health` returning JSON with uptime, TWAI health (state + bus_err + rx_missed + rx_overrun), frames-seen counter, connected-client count + RSSI.
+- [x] **Added mid-milestone:** OTA-capable partition table (`partitions.csv`, 2× 3 MB app slots on 8 MB flash). Default 1 MB `factory` partition was already 79% full after the WiFi stack pulled in; this gives ~10× headroom and lets subsequent milestones flash over WiFi.
+- [x] **Added mid-milestone:** `POST /ota` endpoint (streams a `firmware.bin` from the client into the inactive OTA slot, marks bootable, restarts). Bootloader rollback (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`) reverts to the previous slot if the new firmware fails to reach the "WiFi + HTTP up" mark in `app_main`.
+
+**Done when:** phone joins the AP, `curl 192.168.4.1/health` from the laptop on the same AP returns sensible JSON, frames-seen counter increments while bike is on, `curl -X POST --data-binary @firmware.bin http://192.168.4.1/ota` boots the new image cleanly.
 
 ### 3 — WebSocket `/stream`
 
-- [ ] WebSocket endpoint at `/stream`, one CAN frame per text message, exact SLCAN format `scripts/capture.py` already parses.
-- [ ] Multi-client support isn't required — a single subscriber is fine for the dev phase. If it falls out of the ESP-IDF WS API for free, keep it; don't spend time on it otherwise.
-- [ ] Backpressure: if the WS send queue backs up, drop frames from the WS path (the ring in milestone 4 is the durable copy). Increment a drop counter surfaced on `/health`.
+- [x] WebSocket endpoint at `/stream`, one CAN frame per text message, exact SLCAN format `scripts/capture.py` already parses. Wire format is byte-identical to `can-logger/`'s USB-CDC output by construction — both go through `slcan_format_frame` in `firmware/lib/slcan/`.
+- [x] Multi-client support falls out of the ESP-IDF API — `httpd_get_client_list` + `httpd_ws_get_fd_info` per outgoing frame, no manual fd tracking or mutex. Framework handles disconnects.
+- [x] Backpressure: bounded FreeRTOS queue (64 slots × 33 bytes) between RX loop and WS sender task. `xQueueSendToBack(..., 0)` drops new frames when full; `frames_ws_dropped` counter on `/health` is the "capture degraded" signal.
+- [x] **Added mid-milestone:** `scripts/capture.py --stdin` — reads SLCAN from stdin instead of a serial port so the done-when integration test works without a bridge script (`websocat -n ws://192.168.4.1/stream | capture.py --stdin --label ws-smoke`).
 
-**Done when:** `wscat` from the laptop against `ws://192.168.4.1/stream` produces SLCAN lines identical to what `can-logger/` emits over USB-CDC, and piping them into `scripts/capture.py`'s parser produces the same decoded output as a USB capture of the same bike state. This is the end-to-end transport validation — cheapest possible integration test with the rest of the toolchain.
+**Done when:** `wscat`/`websocat` from the laptop against `ws://192.168.4.1/stream` produces SLCAN lines identical to what `can-logger/` emits over USB-CDC, and piping them into `scripts/capture.py --stdin` produces the same decoded output as a USB capture of the same bike state. This is the end-to-end transport validation — cheapest possible integration test with the rest of the toolchain.
 
 ### 4 — PSRAM ring + `/capture` download
 
@@ -81,15 +87,14 @@ Ordered so each step is independently verifiable. USB-powered at the desk is fin
 
 ## Current state
 
-Milestone 1 not started. Waiting on the F7 power perfboard for the untethered bring-up path (§ Milestone 4+ from the bike), but milestones 1–3 can run entirely on desk USB power in parallel.
+Milestones 1–3 code-complete and compile-clean. Bench verification against the bike is now the next step — all three milestones get validated in one shot by flashing wifi-bridge, joining the AP, and running `websocat -n ws://192.168.4.1/stream | python scripts/capture.py --stdin --label ws-smoke` for 60 s with the bike on, then `python scripts/inventory_ids.py logs/YYYY-MM-DD-ws-smoke/capture.log` — expected output matches prior USB captures (11 always-on IDs, familiar periods). Untethered ride captures still wait on the F7 power perfboard (milestone 4+).
 
 ## Deferred / open
 
-- **Shared TWAI code placement.** ADR 0016 says pull `can-logger/`'s TWAI path into `firmware/lib/`. Decide at milestone 1 whether to do the extraction now or fork-and-clean-up later. Neither is wrong; a fork gets us to a working `/stream` faster, a shared lib avoids drift once both targets are live.
 - **Multi-client WS.** ADR 0016 doesn't require it. Only decide if a use case surfaces (e.g. laptop + phone both subscribed).
 - **Live view design pass.** Layout, typography, decoded-panel visual language — deferred until milestone 5 lands and there's something concrete to iterate on.
 - **STA-mode fallback.** ADR 0016 rejected ESP-as-STA for the dev phase but flagged revisiting if a long ride surfaces where keeping phone cellular matters. Not a milestone here; a follow-up ADR when the need appears.
-- **Retirement plan.** When ADR 0014's BLE bridge ships, this whole subproject gets deleted (ADR 0016 § Retirement). Nothing to do until then; noted so it's not a surprise later.
+- **Long-term role vs ADR 0016 § Retirement.** ADR 0016 assumes this target gets deleted once ADR 0014's BLE bridge ships. That's likely too aggressive — WiFi + browser has real long-term value the BLE bridge can't cheaply replicate: high-bandwidth log pull after a ride, diagnostic mode for the production dashboard, a fallback path if BLE fails in the field, and a debug channel that any device with a browser can hit without a native app. When ADR 0014 gets close to shipping, revisit as an amended or superseding ADR — decide then whether this target retires, or stays as a dev/diagnostic sidecar alongside BLE. Nothing to do until then; flagged so the "just delete it" assumption in ADR 0016 doesn't get taken as settled.
 
 ## Out of scope
 

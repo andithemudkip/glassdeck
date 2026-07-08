@@ -1,0 +1,19 @@
+# Custom partition table for wifi-bridge — OTA-capable layout on 8 MB flash.
+#
+# Two 3 MB app slots (ota_0, ota_1) leave ~10× headroom over the WiFi+HTTP
+# baseline and enough room for the milestone-5 embedded HTML/JS. The ~2 MB
+# tail after ota_1 is unallocated on purpose — reserved for a spiffs/littlefs
+# data partition if we later serve the live-view page from a filesystem
+# instead of EMBED_FILES.
+#
+# OTA flashing itself is not implemented yet; this table just makes the layout
+# ready so future firmware updates can ship over WiFi without a physical
+# re-flash. First-time `pio run -t upload` writes to ota_0; the bootloader
+# boots ota_0 by default until otadata says otherwise.
+#
+# Name,     Type, SubType, Offset,   Size,      Flags
+nvs,        data, nvs,     0x9000,   0x6000,
+otadata,    data, ota,     0xf000,   0x2000,
+phy_init,   data, phy,     0x11000,  0x1000,
+ota_0,      app,  ota_0,   0x20000,  0x300000,
+ota_1,      app,  ota_1,   0x320000, 0x300000,
