@@ -4,7 +4,7 @@ Phase 2+ untethered CAN capture + browser-served live view for the 2020 Husqvarn
 
 Reads frames off the bike's CAN bus, streams them out over WiFi as SLCAN over WebSocket, and serves a static browser page that decodes them live. Replaces the USB tether for ride captures; `can-logger/` stays alive as the desk USB-CDC path.
 
-**Status:** milestones 1–3, 5, 6 code-complete (compile-verified, bench check pending hardware plug-in). Milestone 4 (PSRAM ring + `/capture` download) waits on the F7 power perfboard. M7 (marks) is being re-scoped and folded into M8 (dev view) — see below. See § Milestones for what's staged and where we are, § Current state for the next step.
+**Status:** milestones 1–6 + M7a code-complete (compile-verified, bench check pending hardware plug-in). Milestone 4 (gap-fill ring + browser-side OPFS capture) landed alongside the firmware-side of M7 (`POST /mark`) — see M4/M7a below. Only the M7b UI (mark button on the dev view) is deferred into M8. See § Milestones for what's staged and where we are, § Current state for the next step.
 
 ## Goal
 
@@ -16,12 +16,13 @@ Deliver an untethered dev-phase capture rig with a rider-visible live decoded vi
 - [ADR 0003](../../docs/decisions/0003-firmware-framework-esp-idf.md) — ESP-IDF via PlatformIO (unchanged).
 - [ADR 0015](../../docs/decisions/0015-f7-12v-power-path.md) — 12V-from-F7 power path; USB stays available at the desk.
 - [ADR 0016](../../docs/decisions/0016-wifi-dev-capture-and-live-view.md) — this subproject. WiFi-AP, HTTP + WebSocket, PSRAM ring, browser-served live view.
+- [ADR 0018](../../docs/decisions/0018-m4-browser-primary-capture.md) — amends 0016 for M4: browser-primary OPFS capture, ~512 KB gap-fill ring, `(<sec>.<us>)` on-device timestamps, `?since=` splice protocol.
 
 Golden no-TX rule applies. `TWAI_MODE_LISTEN_ONLY` at boot, no compile-time TX option.
 
 ## Milestones
 
-Ordered so each step is independently verifiable. USB-powered at the desk is fine until milestone 4 — power source is transparent to everything above the TWAI driver.
+Ordered so each step is independently verifiable. USB-powered at the desk is fine throughout — power source is transparent to everything above the TWAI driver. F7 becomes necessary only for actual on-bike ride captures, not for milestone validation.
 
 ### 1 — Scaffold + shared TWAI lib
 
@@ -53,14 +54,22 @@ Ordered so each step is independently verifiable. USB-powered at the desk is fin
 
 **Done when:** `wscat`/`websocat` from the laptop against `ws://192.168.4.1/stream` produces SLCAN lines identical to what `can-logger/` emits over USB-CDC, and piping them into `scripts/capture.py --stdin` produces the same decoded output as a USB capture of the same bike state. This is the end-to-end transport validation — cheapest possible integration test with the rest of the toolchain.
 
-### 4 — PSRAM ring + `/capture` download
+### 4 — Gap-fill ring + browser-side OPFS capture
 
-- [ ] 4 MB ring buffer in PSRAM, allocated at boot. TWAI reader writes into the ring *before* WiFi is up so cold-boot frames aren't lost (per ADR 0016 § Capture buffer).
-- [ ] Drop-oldest on overflow. Drop counter surfaced on `/health`.
-- [ ] `GET /capture` streams the ring as a `.log` file with `Content-Disposition: attachment; filename="capture-<uptime>-<frames_seen>.log"` — filename embeds enough to disambiguate two downloads from one boot.
-- [ ] SLCAN frames in the ring and WS stream carry on-device timestamps (default format: `(<sec>.<us>) t120800...` matching what `scripts/capture.py` writes to disk). Without this, `GET /capture` returns timestamp-free SLCAN, which is a regression from today's USB-tethered captures. Design context + format options + downstream impact live in § Deferred / open; the actual choice + amended ADR get written when this milestone starts.
+Scope narrowed from ADR 0016's original 4 MB / phone-free-ride framing — see [ADR 0018](../../docs/decisions/0018-m4-browser-primary-capture.md) for the amended design. Primary log sink is the browser's OPFS, written continuously as frames arrive; the firmware ring is a short-lived backstop that lets the browser splice over transient WS disconnects.
 
-**Done when:** power the rig from F7 with the bike off, key on, ride a lap of the block, key off, park, connect phone, download `/capture`, drop it into `logs/YYYY-MM-DD-<condition>/`, run `scripts/inventory_ids.py` on it — output matches what a USB capture of the same drive would produce.
+- [x] ~512 KB PSRAM ring (`RING_SLOTS = 8192` × 64-byte slots), ~27 s at 300 fps with the timestamp prefix. Allocated at boot via `heap_caps_malloc(MALLOC_CAP_SPIRAM)`; TWAI reader writes into it *before* WiFi is up so cold-boot frames aren't lost. Drop-oldest on overflow, `frames_ring_dropped` counter surfaced on `/health`.
+- [x] On-device timestamps in the RX loop via `esp_timer_get_time()` (µs since boot, monotonic — same clock `/health` uptime already uses). Ring entries and WS-emitted frames carry the same stamp. Wire format: **`(<sec>.<us>) t120806A4...\r`** — byte-for-byte match to what `scripts/capture.py` writes to disk today (~14 extra bytes/frame). Locked in ADR 0018 § On-device timestamps. Buffer sizing: `SLCAN_TS_PREFIX_MAX = 24` sibling constant added to `firmware/lib/slcan/include/slcan.h`; `SLCAN_MAX_LINE_BYTES = 56` is the combined-buffer ceiling used by the ring + WS queue slot.
+- [x] `GET /capture?since=<ts_us>` streams every ring entry with `ts > since`, in order, chunked. Bare `GET /capture` returns the full current ring. `X-Bike-Gap-Ms: <ms>` response header when `since` precedes the ring's earliest surviving entry. Snapshot-under-spinlock read pattern; writer never blocks.
+- [x] Browser writes frames to OPFS via `navigator.storage.getDirectory()` + `createWritable({keepExistingData:true})` in ~500 ms batches. Tracks `lastPersistedTs` in memory; snapshots to `active-capture.json` in OPFS on every flush so a page reload picks up mid-capture.
+- [x] **Backfill protocol on WS reconnect:** live consumption pauses into `resumeBuffer` → `GET /capture?since=<lastPersistedTs>` → append body to OPFS → advance `lastPersistedTs` to the highest ts returned → drain `resumeBuffer` dropping frames already covered → resume live-WS→OPFS. Runs identically for the 1st, 2nd, Nth reconnect. Also fires on the first WS connect after a page reload if the sidecar shows a resumed capture.
+- [x] Gap markers: on `X-Bike-Gap-Ms: <ms>`, browser writes `# GAP <ms>\r\n` into OPFS immediately before the backfill body. Same comment-prefix convention as `# MARK` (M7a).
+- [x] Wake-lock + install path: rider view acquires `navigator.wakeLock` on capture start; releases on stop/export; reacquires on `visibilitychange`. iOS Safari sees an "Add to Home Screen" hint (dismissible, persisted in `localStorage`). Chrome desktop / Android Chrome call `navigator.storage.persist()` on start; iOS ignores it and relies on the install path.
+- [x] Export flow: header "Export" button (visible after Stop or on page reload with a sidecar) reads the OPFS file as a `Blob` and triggers a download named `capture-<startIso>-<frames>.log`. Single code path across platforms.
+- [x] **Existing browser-view parsers.** M6's decoded panel now strips the `(<sec>.<us>) ` prefix in `ws.onmessage` before dispatching to `parseSlcan`/`routeFrame`; `lastFrameTs` is captured for the backfill anchor. Backward compatible with an unprefixed frame (drops through untouched).
+- [x] Downstream: `scripts/capture.py --stdin` accepts both prefixed and unprefixed lines; when the prefix is present the parsed µs seconds replace the host `time.time()` as `msg.timestamp` so the on-disk `capture.log` carries firmware-side timing end-to-end. `scripts/inventory_ids.py` logs `# GAP <ms>` markers to stderr (log-and-skip); `# MARK` continues to fall through silently.
+
+**Done when:** USB-power the rig at the desk with the bike attached and key-on, phone on the AP, load `192.168.4.1/`, Add to Home Screen, Start capture, toggle phone WiFi off for ~10 s, back on, Stop, Export. Downloaded log is byte-identical to what a continuous USB `can-logger/` capture of the same bike state would produce, minus at most a handful of frames right at the reconnect boundary. Then repeat with a ~60 s disconnect (> ring capacity): downloaded log contains exactly one `# GAP <ms>` marker at the boundary, `ms` value matches wall-clock disconnect time within a second, `scripts/inventory_ids.py` handles the marker cleanly.
 
 ### 5 — Static HTML shell + raw-frame ticker
 
@@ -85,9 +94,9 @@ Ordered so each step is independently verifiable. USB-powered at the desk is fin
 
 ### 7 — `/mark` endpoint (firmware side)
 
-- [ ] `POST /mark?label=<text>` inserts a `# MARK <label>` line into the ring at the current position. Compatible with `scripts/capture.py`'s existing `m` hotkey mark format so downstream tools don't need changes.
+- [x] `POST /mark?label=<text>` inserts a `# MARK <label>` line into the ring at the current position and also fans it out on `/stream` so live viewers see it immediately. Label is URL-decoded, trimmed, capped at 63 chars, control characters replaced with `?`. Empty label → 400. Compatible with `scripts/capture.py`'s existing `m` hotkey mark format so downstream tools don't need changes.
 
-Split from the original M7: the endpoint stays here because it's firmware and depends on M4's ring. The **UI** side — a mark button + label input in the browser — moved into M8 where the operator-facing dev view actually lives. The rider view is glanceable-instrument territory; a mark button belongs where the operator is looking (stationary tests, procedure-driven captures, desk replay), not on a phone mounted at handlebar height. See also [[experiment-design-hand-driven-marks]] — riders often can't press marks in real time anyway.
+Split from the original M7: the endpoint landed with M4 because it writes into the same ring. The **UI** side — a mark button + label input in the browser — moved into M8 where the operator-facing dev view actually lives. The rider view is glanceable-instrument territory; a mark button belongs where the operator is looking (stationary tests, procedure-driven captures, desk replay), not on a phone mounted at handlebar height. See also [[experiment-design-hand-driven-marks]] — riders often can't press marks in real time anyway.
 
 **Done when:** a `curl -X POST 'http://192.168.4.1/mark?label=test'` during an active capture, then a `GET /capture`, produces a file containing `# MARK test` at the right offset, and `scripts/inventory_ids.py` handles it identically to USB-captured marks.
 
@@ -106,9 +115,18 @@ Not included, deferred to later milestones as they're needed: the per-bit anomal
 
 ## Current state
 
-Milestones 1–3, 5, and 6 code-complete and compile-clean. Bench verification against the bike is the next step — one flash validates the WS transport (M3), the browser shell (M5), and the decoded panel (M6) together: flash wifi-bridge, join the AP, open `http://192.168.4.1/` on the phone with the bike on, expect the decoded cells (RPM, coolant, throttle, gear, kill, side-stand, wheel speeds, clutch) to track the OEM cluster and the amber liveness bar under the header to stay lit while the bus is active. Freshness bars should decay to zero within ~500 ms of turning off the ignition. Regression check on M3 (uses the raw stream, which is unchanged): `websocat -n ws://192.168.4.1/stream | python scripts/capture.py --stdin --label ws-smoke` for 60 s, then `python scripts/inventory_ids.py logs/YYYY-MM-DD-ws-smoke/capture.log` — expected output matches prior USB captures (11 always-on IDs, familiar periods).
+Milestones 1–6 + M7a code-complete and compile-clean (both `wifi-bridge` and `can-logger` build with the `SLCAN_MAX_LINE_BYTES` bump). Bench verification against the bike is the next step — one flash validates the WS transport (M3), the decoded panel (M6), the new capture pipeline (M4), and marks (M7a) together:
 
-Milestone 4 (PSRAM ring + `/capture`) and untethered ride captures still wait on the F7 power perfboard. M7a (`/mark` endpoint) is small and can land in the same session as M4 since it writes into the same ring. M8 (dev view + Active unknown bytes port) is a self-contained next chunk that doesn't need hardware.
+1. `curl -X POST --data-binary @.pio/build/wifi-bridge/firmware.bin http://192.168.4.1/ota` — OTA the new build (bootloader rollback fires if it can't reach WiFi+HTTP).
+2. `curl 'http://192.168.4.1/capture' | head` — expect `(<sec>.<us>) t...\r` lines (M4 timestamps land).
+3. `curl -X POST 'http://192.168.4.1/mark?label=smoke'` → `curl 'http://192.168.4.1/capture' | grep '# MARK'` — expect `# MARK smoke\r` (M7a).
+4. On the phone: open `http://192.168.4.1/`, Add to Home Screen, **Start capture**, toggle WiFi off for ~10 s, back on, Stop, Export.
+5. Downloaded file → `python scripts/capture.py --stdin --label m4-smoke < downloaded.log` — writes `logs/YYYY-MM-DD-m4-smoke/capture.log` with firmware-side timestamps.
+6. `python scripts/inventory_ids.py logs/YYYY-MM-DD-m4-smoke/` — 11 always-on IDs, familiar periods, `# GAP` lines (if any) on stderr.
+
+Ring-overflow test: repeat step 4 with a ~60 s disconnect (> ring capacity) and expect exactly one `# GAP <ms>` marker at the boundary, `ms` within ~1 s of wall-clock.
+
+M8 (dev view + Active unknown bytes port) is the next self-contained chunk and doesn't need hardware. Actual on-bike ride captures still wait on the F7 power perfboard, but that's a validation-scope question.
 
 ## Deferred / open
 
@@ -116,14 +134,8 @@ Milestone 4 (PSRAM ring + `/capture`) and untethered ride captures still wait on
 - **Live view design pass.** Bundled into M6 — the decoded panel got a deliberate visual pass (verification-cell layout, Husqvarna competition amber accent, freshness-bar halo, peak chips). Any further iteration is now down to what a real ride surfaces.
 - **STA-mode fallback.** ADR 0016 rejected ESP-as-STA for the dev phase but flagged revisiting if a long ride surfaces where keeping phone cellular matters. Not a milestone here; a follow-up ADR when the need appears.
 - **Long-term role vs ADR 0016 § Retirement.** ADR 0016 assumes this target gets deleted once ADR 0014's BLE bridge ships. That's likely too aggressive — WiFi + browser has real long-term value the BLE bridge can't cheaply replicate: high-bandwidth log pull after a ride, diagnostic mode for the production dashboard, a fallback path if BLE fails in the field, and a debug channel that any device with a browser can hit without a native app. When ADR 0014 gets close to shipping, revisit as an amended or superseding ADR — decide then whether this target retires, or stays as a dev/diagnostic sidecar alongside BLE. Nothing to do until then; flagged so the "just delete it" assumption in ADR 0016 doesn't get taken as settled.
-- **On-device timestamps for the ring + WS stream (M4 companion).** ADR 0016 § Out of scope currently says "Timestamping in firmware — SLCAN wire format, host adds timestamps — same as `can-logger/`." That worked when the only egress was USB-CDC into a live host that stamped on receive. Once M4 lands and `GET /capture` starts returning ring dumps hours after the fact, host-side stamping no longer applies — the download is timestamp-free SLCAN, which loses ordering precision every analysis script downstream is used to. Fix: stamp in the RX loop using `esp_timer_get_time()` (int64 µs since boot, already used for `/health` uptime — no RTC, no NTP, monotonic relative-time, same semantics `capture.py` produces on disk today). Effort is ~15 lines of C in the TWAI RX loop + a `slcan_format_frame_ts()` variant in `firmware/lib/slcan/`. Format decision to make when we build it — three candidates:
-  - **`(<sec>.<us>) t120800...`** (recommended default). Matches `capture.py`'s on-disk format byte-for-byte; existing analysis scripts consume the stream with zero changes. ~14 extra bytes/frame → ~30% larger ring footprint (4 MB ring: ~5 min at 300 fps → ~4 min).
-  - **Canusb `T` extension:** 4-hex-digit ms suffix on the SLCAN line (`t120800...XXXX\r`), gated by a session-mode command. ~4 bytes/frame. Wraps every 60 s; needs host-side unwrapping. Compatible with third-party CAN tooling.
-  - **Raw `<us_hex> t120800...`** prefix. Small, monotonic, no wrap, but no downstream tool speaks it — every consumer needs a new parser branch.
-
-  Downstream: `capture.py --stdin` needs a regex loosen to accept both prefixed and unprefixed lines (existing captures don't have timestamps). Everything else in `scripts/` that goes through `signals.py` is timestamp-agnostic and needs no change.
-
-  Kicker: this needs to land in M4, not after — the ring format is what `GET /capture` serialises, so retrofit means invalidating older captures or dual-format code. Amend ADR 0016's "no firmware timestamps" line via a new ADR (`docs/decisions/NNNN-on-device-timestamps.md`, project convention is supersede-don't-rewrite) at the same time.
+- **Phone-free / ESP-only ride captures.** ADR 0016's original M4 framing (4 MB ring, standalone rig on the bike, download at the desk hours later) was scoped for this — leave the ESP on the bike, ride, come back, grab the file. M4's redesign drops it: everyone reverse-engineering a bike has a phone, and requiring the phone in the loop simplifies the firmware substantially (small gap-fill ring instead of a large capture ring, no `/capture` filename disambiguation for multi-boot downloads, one storage clock instead of two). If a contributor eventually wants ESP-only rides — an audience without a suitable phone, or a "leave the rig running for a week and grab data" workflow — the extension is straightforward: grow the ring, keep `GET /capture` responding to the bare no-`since` form, keep the timestamp format. File an issue when the need is concrete rather than pre-building for it.
+- ~~**On-device timestamp format (M4 open decision).**~~ Closed by [ADR 0018](../../docs/decisions/0018-m4-browser-primary-capture.md) § On-device timestamps. Wire format is `(<sec>.<us>) t120806A4...\r` — byte-for-byte match to what `capture.py` writes to disk today; every existing `scripts/` tool consumes the stream with the regex loosen in `parse_slcan_line`. ~14 extra bytes/frame → ~27 s ring at 300 fps in the 512 KB budget.
 - **`/dev` view superseding `scripts/live_view/`.** The Textual TUI does much more than an anomaly panel: watch pins with sparklines, per-bit z-score anomalies (ADR 0007's `BaselineStats`), procedure-driven step sequencing off a `.procedure.yaml`, the hypothesis / expect-shape workflow, operator vs analysis screens, session mark orchestration. M8 is the first step (raw ticker + Active unknown bytes) but full parity is several milestones out — probably one per subsystem, roughly in the order R&D leans on them. The intent is that once parity lands, `scripts/live_view/` retires and `capture.py` speaks to the ESP for procedures + marks instead of driving the TUI directly. Not a milestone here; captured so the direction is on file.
 
 ## Out of scope
@@ -131,5 +143,4 @@ Milestone 4 (PSRAM ring + `/capture`) and untethered ride captures still wait on
 - Any TX path.
 - SD card logging.
 - Frame filtering in firmware.
-- Timestamping in firmware (SLCAN wire format, host adds timestamps — same as `can-logger/`).
 - Native phone app.

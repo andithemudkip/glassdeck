@@ -39,6 +39,12 @@ from collections import defaultdict
 from pathlib import Path
 
 LINE_RE = re.compile(r"\((\d+\.\d+)\)\s+\S+\s+([0-9A-Fa-f]+)#([0-9A-Fa-f]*)")
+# wifi-bridge M4 (ADR 0018) prepends a `# GAP <ms>` marker into the log
+# whenever a WS reconnect couldn't be covered by the firmware ring. Log it to
+# stderr so an operator scanning inventory output sees the gap without it
+# polluting the per-ID table. `# MARK` lines still fall through silently —
+# see `--anchor-label` for the events.csv-driven mark path.
+GAP_RE = re.compile(r"^#\s*GAP\s+(\d+)")
 
 
 def find_anchor(events_csv: Path, label: str) -> float | None:
@@ -55,6 +61,10 @@ def parse_log(log: Path) -> dict[str, list[float]]:
     ids: dict[str, list[float]] = defaultdict(list)
     with log.open() as f:
         for line in f:
+            gm = GAP_RE.match(line)
+            if gm is not None:
+                sys.stderr.write(f"# GAP {gm.group(1)} ms (unrecovered window in capture)\n")
+                continue
             m = LINE_RE.match(line)
             if not m:
                 continue

@@ -19,10 +19,12 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdatomic.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_err.h"
 #include "esp_event.h"
+#include "esp_heap_caps.h"
 #include "esp_http_server.h"
 #include "esp_idf_version.h"
 #include "esp_mac.h"
@@ -88,27 +90,117 @@ static _Atomic uint64_t frames_seen = 0;
 //   frames_ws_dropped — CAN frames the RX loop couldn't enqueue (WS queue full)
 // Their sum is intentionally NOT equal to frames_seen: frames that dequeued
 // with zero clients connected are neither sent nor dropped, they just fall
-// out silently (the WS path is opportunistic; the ring buffer in milestone 4
-// is what backs durable capture).
+// out silently (the WS path is opportunistic; the ring is what backs durable
+// capture).
 static _Atomic uint64_t frames_ws_sent = 0;
 static _Atomic uint64_t frames_ws_dropped = 0;
+
+// Ring writer overwrites the oldest slot when full (ADR 0018 § Storage
+// architecture — drop-oldest). Counter increments per overwritten live slot;
+// surfaced on /health as the "capture degraded" signal for the ring path,
+// same intent as frames_ws_dropped for the WS path.
+static _Atomic uint64_t frames_ring_dropped = 0;
 
 // Handle promoted from local in http_server_start; ws_tx_task and
 // health_handler both need it for httpd_get_client_list / send_frame_async.
 static httpd_handle_t s_server;
 
-// One SLCAN line, copied into the queue by the RX loop. 32-byte payload matches
-// SLCAN_MAX_FRAME_BYTES (longest classic-CAN line is 27 bytes including \r).
+// One SLCAN line, copied into the queue by the RX loop. Grows to
+// SLCAN_MAX_LINE_BYTES (M4) so the on-device (<sec>.<us>) timestamp prefix
+// fits alongside the SLCAN payload. ts_us is the same esp_timer_get_time()
+// stamp the ring keys on — the WS sender doesn't use it directly, but the
+// same shape lets the RX loop write ring + queue slots from one struct.
 typedef struct {
+    int64_t ts_us;
     uint8_t len;
-    char    buf[SLCAN_MAX_FRAME_BYTES];
+    char    buf[SLCAN_MAX_LINE_BYTES];
 } ws_item_t;
 
-// Depth 64 × ~40 bytes/item ≈ 2.5 KB total — a few 10s of ms of headroom at
+// Depth 64 × ~64 bytes/item ≈ 4 KB total — a few 10s of ms of headroom at
 // peak bike CAN rates. Drop-newest (xQueueSendToBack with 0 timeout) on full;
 // see the milestone-3 plan for the ADR-alignment argument.
 #define WS_TX_QUEUE_DEPTH 64
 static QueueHandle_t ws_tx_q;
+
+// -----------------------------------------------------------------------------
+// PSRAM gap-fill ring (ADR 0018)
+// -----------------------------------------------------------------------------
+// ~512 KB of PSRAM covering ~27 s at 300 fps with the (sec.us) prefix. Purpose
+// is *not* to be the primary capture sink (that's the browser's OPFS, ADR 0018
+// § Storage architecture) — it's a short-lived backstop so the browser can
+// splice over WS disconnects via GET /capture?since=<ts_us>.
+//
+// Producer: the app_main RX loop (single writer).
+// Consumers: /capture GET handler (0..N, but each takes an index snapshot
+// upfront and iterates on its own copy, so a running writer never blocks it).
+// A tiny portMUX around the head advance keeps writer + snapshot atomic
+// without ever holding the lock across the payload memcpy.
+typedef struct {
+    int64_t ts_us;
+    uint8_t len;
+    char    buf[SLCAN_MAX_LINE_BYTES];
+} ring_slot_t;
+
+#define RING_SLOTS  8192  // ~512 KB, ~27 s @ 300 fps with the ts prefix
+
+static ring_slot_t         *s_ring;         // heap_caps_malloc'd into PSRAM
+static portMUX_TYPE         s_ring_mux = portMUX_INITIALIZER_UNLOCKED;
+static uint32_t             s_ring_head;    // next write index [0, RING_SLOTS)
+static uint64_t             s_ring_writes;  // total frames written (monotonic)
+
+// Grab a consistent snapshot of the ring's state under the spinlock. The
+// caller iterates on `first_ts_us` -> `last_ts_us` in ring order using the
+// returned head + writes count; slots overwritten mid-response are just
+// skipped by the timestamp filter (drop-oldest matches ADR 0018).
+typedef struct {
+    uint32_t head;
+    uint64_t writes;
+    int64_t  earliest_ts_us;   // 0 if ring is empty
+    int64_t  latest_ts_us;     // 0 if ring is empty
+} ring_snapshot_t;
+
+static void ring_snapshot(ring_snapshot_t *out) {
+    portENTER_CRITICAL(&s_ring_mux);
+    out->head    = s_ring_head;
+    out->writes  = s_ring_writes;
+    portEXIT_CRITICAL(&s_ring_mux);
+    if (out->writes == 0) {
+        out->earliest_ts_us = 0;
+        out->latest_ts_us   = 0;
+        return;
+    }
+    // Earliest live slot is either index 0 (not yet wrapped) or the one right
+    // after head (wrapped — head points at the oldest surviving entry).
+    uint32_t earliest_idx = (out->writes <= RING_SLOTS)
+        ? 0
+        : (out->head % RING_SLOTS);
+    uint32_t latest_idx = (out->head + RING_SLOTS - 1) % RING_SLOTS;
+    out->earliest_ts_us = s_ring[earliest_idx].ts_us;
+    out->latest_ts_us   = s_ring[latest_idx].ts_us;
+}
+
+// Copy `len` bytes into the next ring slot, tagged with `ts_us`. Bumps
+// frames_ring_dropped when the slot being overwritten held a live frame.
+static void ring_write(int64_t ts_us, const char *buf, size_t len) {
+    if (s_ring == NULL || len == 0 || len > SLCAN_MAX_LINE_BYTES) return;
+    portENTER_CRITICAL(&s_ring_mux);
+    uint32_t idx = s_ring_head;
+    bool overwriting = (s_ring_writes >= RING_SLOTS);
+    s_ring_head = (idx + 1) % RING_SLOTS;
+    s_ring_writes++;
+    portEXIT_CRITICAL(&s_ring_mux);
+    // Payload copy happens outside the spinlock — the slot at `idx` is owned
+    // by this writer between the head advance and the next wrap (RING_SLOTS
+    // frames from now). A concurrent snapshot may observe the pre-copy bytes
+    // for this slot; that's benign — the SLCAN parse on the other side just
+    // drops a malformed line, matching drop-oldest semantics.
+    s_ring[idx].ts_us = ts_us;
+    s_ring[idx].len   = (uint8_t)len;
+    memcpy(s_ring[idx].buf, buf, len);
+    if (overwriting) {
+        atomic_fetch_add_explicit(&frames_ring_dropped, 1, memory_order_relaxed);
+    }
+}
 
 static void write_locked(const char *buf, size_t n) {
     xSemaphoreTake(stdout_mutex, portMAX_DELAY);
@@ -127,7 +219,7 @@ static void print_boot_header(void) {
     // `#`-prefixed and `\r`-terminated so the SLCAN parser downstream ignores
     // these lines cleanly, but they still render on `pio device monitor` for
     // the operator to copy the SSID/password into the phone.
-    printf("# ---- wifi-bridge (milestone 5) ----\r\n");
+    printf("# ---- wifi-bridge (milestone 6/M4) ----\r\n");
     printf("# idf=%s\r\n", esp_get_idf_version());
     printf("# psram_bytes=%u\r\n", (unsigned)esp_psram_get_size());
     printf("# can_bitrate_kbps=%d can_tx=GPIO%d can_rx=GPIO%d mode=listen-only\r\n",
@@ -348,10 +440,14 @@ static esp_err_t health_handler(httpd_req_t *req) {
     twai_lib_health_t h = { 0 };
     twai_lib_health(&h);
 
-    uint64_t uptime_ms = (uint64_t)(esp_timer_get_time() / 1000);
-    uint64_t seen       = atomic_load_explicit(&frames_seen, memory_order_relaxed);
-    uint64_t ws_sent    = atomic_load_explicit(&frames_ws_sent, memory_order_relaxed);
-    uint64_t ws_dropped = atomic_load_explicit(&frames_ws_dropped, memory_order_relaxed);
+    uint64_t uptime_ms   = (uint64_t)(esp_timer_get_time() / 1000);
+    uint64_t seen        = atomic_load_explicit(&frames_seen, memory_order_relaxed);
+    uint64_t ws_sent     = atomic_load_explicit(&frames_ws_sent, memory_order_relaxed);
+    uint64_t ws_dropped  = atomic_load_explicit(&frames_ws_dropped, memory_order_relaxed);
+    uint64_t ring_dropped = atomic_load_explicit(&frames_ring_dropped, memory_order_relaxed);
+
+    ring_snapshot_t snap;
+    ring_snapshot(&snap);
 
     wifi_sta_list_t stas;
     memset(&stas, 0, sizeof(stas));
@@ -366,7 +462,7 @@ static esp_err_t health_handler(httpd_req_t *req) {
         strcpy(rssi_str, "null");
     }
 
-    char body[384];
+    char body[512];
     int n = snprintf(body, sizeof(body),
         "{"
         "\"uptime_ms\":%llu,"
@@ -379,7 +475,10 @@ static esp_err_t health_handler(httpd_req_t *req) {
         "\"ap_client_rssi_dbm\":%s,"
         "\"ws_clients\":%d,"
         "\"frames_ws_sent\":%llu,"
-        "\"frames_ws_dropped\":%llu"
+        "\"frames_ws_dropped\":%llu,"
+        "\"frames_ring_dropped\":%llu,"
+        "\"ring_earliest_ts_us\":%lld,"
+        "\"ring_latest_ts_us\":%lld"
         "}",
         (unsigned long long)uptime_ms,
         twai_lib_state_str(h.state),
@@ -391,7 +490,10 @@ static esp_err_t health_handler(httpd_req_t *req) {
         rssi_str,
         count_ws_clients(),
         (unsigned long long)ws_sent,
-        (unsigned long long)ws_dropped);
+        (unsigned long long)ws_dropped,
+        (unsigned long long)ring_dropped,
+        (long long)snap.earliest_ts_us,
+        (long long)snap.latest_ts_us);
 
     if (n < 0 || (size_t)n >= sizeof(body)) {
         return httpd_resp_send_500(req);
@@ -399,6 +501,159 @@ static esp_err_t health_handler(httpd_req_t *req) {
 
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, body, n);
+}
+
+// -----------------------------------------------------------------------------
+// GET /capture?since=<ts_us> — gap-fill ring dump (ADR 0018 § /capture protocol)
+// -----------------------------------------------------------------------------
+//
+// Streams every ring entry with ts > since, in ring order, as chunked SLCAN
+// with the same (<sec>.<us>) prefix as /stream. When since precedes the ring's
+// earliest surviving entry (i.e. the ring wrapped over the requested window),
+// the response carries an X-Bike-Gap-Ms header quantifying the unrecoverable
+// slice; the browser writes a matching `# GAP <ms>` marker into OPFS.
+//
+// Bare GET /capture (no `since`) dumps the whole current ring — handy for
+// `curl 192.168.4.1/capture` ad-hoc inspection.
+
+// Parse a decimal int64 from the query string. Returns true on success.
+static bool parse_int64_query(httpd_req_t *req, const char *key, int64_t *out) {
+    size_t qlen = httpd_req_get_url_query_len(req);
+    if (qlen == 0) return false;
+    char qbuf[64];
+    if (qlen >= sizeof(qbuf)) qlen = sizeof(qbuf) - 1;
+    if (httpd_req_get_url_query_str(req, qbuf, sizeof(qbuf)) != ESP_OK) return false;
+    char vbuf[32];
+    if (httpd_query_key_value(qbuf, key, vbuf, sizeof(vbuf)) != ESP_OK) return false;
+    char *end = NULL;
+    long long v = strtoll(vbuf, &end, 10);
+    if (end == vbuf) return false;
+    *out = (int64_t)v;
+    return true;
+}
+
+static esp_err_t capture_handler(httpd_req_t *req) {
+    int64_t since = 0;
+    bool has_since = parse_int64_query(req, "since", &since);
+
+    if (s_ring == NULL) {
+        // Ring allocation failed at boot. Report empty with a gap header
+        // covering the whole requested window if a `since` was supplied.
+        if (has_since) {
+            int64_t now = esp_timer_get_time();
+            char hdr[24];
+            int64_t gap_ms = (now > since) ? (now - since) / 1000 : 0;
+            snprintf(hdr, sizeof(hdr), "%lld", (long long)gap_ms);
+            httpd_resp_set_hdr(req, "X-Bike-Gap-Ms", hdr);
+        }
+        httpd_resp_set_type(req, "text/plain; charset=utf-8");
+        return httpd_resp_send(req, "", 0);
+    }
+
+    ring_snapshot_t snap;
+    ring_snapshot(&snap);
+
+    // Set gap header BEFORE any body chunks — httpd headers latch on the
+    // first httpd_resp_send_chunk call.
+    if (has_since && snap.writes > 0 && since < snap.earliest_ts_us) {
+        int64_t gap_us = snap.earliest_ts_us - since;
+        char hdr[24];
+        snprintf(hdr, sizeof(hdr), "%lld", (long long)(gap_us / 1000));
+        httpd_resp_set_hdr(req, "X-Bike-Gap-Ms", hdr);
+    }
+
+    httpd_resp_set_type(req, "text/plain; charset=utf-8");
+    // Discourage intermediate caches — the ring content changes every RX frame.
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+
+    if (snap.writes == 0) {
+        return httpd_resp_send(req, "", 0);
+    }
+
+    // Iterate from earliest surviving slot forward to (head - 1). The set of
+    // live indices is [earliest_idx .. earliest_idx + live_count) mod RING.
+    uint32_t live_count = (snap.writes < RING_SLOTS)
+        ? (uint32_t)snap.writes
+        : RING_SLOTS;
+    uint32_t start_idx = (snap.head + RING_SLOTS - live_count) % RING_SLOTS;
+
+    for (uint32_t i = 0; i < live_count; i++) {
+        uint32_t idx = (start_idx + i) % RING_SLOTS;
+        // Snapshot the slot's ts + len once so a concurrent writer overwriting
+        // this exact slot (only possible if we're lagging by ~27 s of frames)
+        // can't tear the len/ts pair we send.
+        int64_t slot_ts = s_ring[idx].ts_us;
+        uint8_t slot_len = s_ring[idx].len;
+        if (slot_len == 0 || slot_len > SLCAN_MAX_LINE_BYTES) continue;
+        if (has_since && slot_ts <= since) continue;
+        if (httpd_resp_send_chunk(req, s_ring[idx].buf, slot_len) != ESP_OK) {
+            // Client disconnected mid-stream — bail cleanly.
+            return ESP_FAIL;
+        }
+    }
+    return httpd_resp_send_chunk(req, NULL, 0);
+}
+
+// -----------------------------------------------------------------------------
+// POST /mark?label=<text> — M7a. Inserts `# MARK <label>` into the ring at the
+// current position; also broadcast on /stream so live viewers see it live.
+// -----------------------------------------------------------------------------
+
+static esp_err_t mark_handler(httpd_req_t *req) {
+    size_t qlen = httpd_req_get_url_query_len(req);
+    if (qlen == 0) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                   "missing ?label= query param");
+    }
+    char qbuf[128];
+    if (qlen >= sizeof(qbuf)) qlen = sizeof(qbuf) - 1;
+    if (httpd_req_get_url_query_str(req, qbuf, sizeof(qbuf)) != ESP_OK) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad query");
+    }
+    char label[64];
+    if (httpd_query_key_value(qbuf, "label", label, sizeof(label)) != ESP_OK) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "label missing");
+    }
+    // Trim; reject empty. Keep control chars out — the mark ends up in a plain
+    // text log line eventually.
+    size_t len = strlen(label);
+    while (len > 0 && (label[len - 1] == ' ' || label[len - 1] == '\t')) {
+        label[--len] = '\0';
+    }
+    if (len == 0) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "empty label");
+    }
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)label[i];
+        if (c < 0x20 || c == 0x7f) label[i] = '?';
+    }
+
+    // Build the line. `# MARK ` is prefix-compatible with the capture.py hotkey
+    // mark convention so downstream (# MARK / # GAP) shares one skip branch.
+    char line[SLCAN_MAX_LINE_BYTES];
+    int n = snprintf(line, sizeof(line), "# MARK %s\r", label);
+    if (n <= 0 || n >= (int)sizeof(line)) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                   "line too long");
+    }
+
+    int64_t ts_us = esp_timer_get_time();
+    ring_write(ts_us, line, (size_t)n);
+
+    // Also fan out on /stream so live viewers see the mark in real time.
+    ws_item_t slot;
+    slot.ts_us = ts_us;
+    slot.len   = (uint8_t)n;
+    memcpy(slot.buf, line, (size_t)n);
+    xQueueSendToBack(ws_tx_q, &slot, 0);
+
+    httpd_resp_set_type(req, "application/json");
+    char body[96];
+    int bn = snprintf(body, sizeof(body),
+        "{\"ok\":true,\"ts_us\":%lld,\"label\":\"%s\"}",
+        (long long)ts_us, label);
+    if (bn < 0) return httpd_resp_send_500(req);
+    return httpd_resp_send(req, body, bn);
 }
 
 // -----------------------------------------------------------------------------
@@ -508,6 +763,22 @@ static void http_server_start(void) {
         .handle_ws_control_frames = false,
     };
     ESP_ERROR_CHECK(httpd_register_uri_handler(s_server, &stream_uri));
+
+    static const httpd_uri_t capture_uri = {
+        .uri = "/capture",
+        .method = HTTP_GET,
+        .handler = capture_handler,
+        .user_ctx = NULL,
+    };
+    ESP_ERROR_CHECK(httpd_register_uri_handler(s_server, &capture_uri));
+
+    static const httpd_uri_t mark_uri = {
+        .uri = "/mark",
+        .method = HTTP_POST,
+        .handler = mark_handler,
+        .user_ctx = NULL,
+    };
+    ESP_ERROR_CHECK(httpd_register_uri_handler(s_server, &mark_uri));
 }
 
 // -----------------------------------------------------------------------------
@@ -550,6 +821,19 @@ void app_main(void) {
     stdout_mutex = xSemaphoreCreateMutex();
     ws_tx_q = xQueueCreate(WS_TX_QUEUE_DEPTH, sizeof(ws_item_t));
 
+    // Allocate the ring in PSRAM (ADR 0018 § Storage architecture). Before
+    // TWAI + WiFi come up so any cold-boot frame lands in the ring. If the
+    // allocation fails we log and continue — the WS + USB paths still work,
+    // /capture just responds empty (X-Bike-Gap-Ms covers the gap).
+    s_ring = (ring_slot_t *)heap_caps_malloc(
+        (size_t)RING_SLOTS * sizeof(ring_slot_t),
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_ring != NULL) {
+        // Zero-init so a snapshot before the first write reads ts=0, not
+        // uninitialised PSRAM. Cheap at boot (~512 KB memset over PSRAM).
+        memset(s_ring, 0, (size_t)RING_SLOTS * sizeof(ring_slot_t));
+    }
+
     // Yellow means "we booted, nothing else is up yet." Colors flip as each
     // surface comes online: green (TWAI up, no wifi yet) → blue (AP up, no
     // client) → cyan (client joined). Red is BUS_OFF or AP_STOP.
@@ -558,6 +842,10 @@ void app_main(void) {
 
     derive_ap_ssid();
     print_boot_header();
+    printf("# ring_bytes=%u slots=%u alloc=%s\r\n",
+           (unsigned)((size_t)RING_SLOTS * sizeof(ring_slot_t)),
+           (unsigned)RING_SLOTS,
+           s_ring != NULL ? "ok" : "FAILED");
 
     twai_lib_config_t cfg = {
         .bitrate_kbps = CAN_BITRATE_KBPS,
@@ -590,21 +878,38 @@ void app_main(void) {
     // in pending-verify state (e.g. first flash via USB, not from OTA).
     esp_ota_mark_app_valid_cancel_rollback();
 
-    char buf[SLCAN_MAX_FRAME_BYTES];
+    char line[SLCAN_MAX_LINE_BYTES];
     twai_message_t msg;
     while (true) {
         if (twai_lib_receive(&msg, portMAX_DELAY)) {
-            size_t n = slcan_format_frame(&msg, buf);
-            write_locked(buf, n);
+            // On-device timestamp per ADR 0018. `esp_timer_get_time()` is µs
+            // since boot, monotonic — same clock /health uptime uses.
+            int64_t ts_us = esp_timer_get_time();
+            int prefix_n = snprintf(
+                line, SLCAN_TS_PREFIX_MAX + 1, "(%lld.%06lld) ",
+                (long long)(ts_us / 1000000), (long long)(ts_us % 1000000));
+            if (prefix_n < 0 || prefix_n >= (int)SLCAN_TS_PREFIX_MAX) {
+                prefix_n = 0;  // pathological — emit unprefixed rather than corrupt
+            }
+            size_t frame_n = slcan_format_frame(&msg, line + prefix_n);
+            size_t n = (size_t)prefix_n + frame_n;
+
+            write_locked(line, n);
             atomic_fetch_add_explicit(&frames_seen, 1, memory_order_relaxed);
             status_led_pulse_rx();
+
+            // Ring first: the ring is the durable(-ish) side, WS is
+            // opportunistic. If the queue drop-newest fires we still have
+            // the frame in the ring for /capture?since=.
+            ring_write(ts_us, line, n);
 
             // Fan out to WS clients via the sender task. Drop-newest on queue
             // full — bumps frames_ws_dropped for the "capture degraded"
             // signal on /health.
             ws_item_t slot;
-            slot.len = (uint8_t)n;
-            memcpy(slot.buf, buf, n);
+            slot.ts_us = ts_us;
+            slot.len   = (uint8_t)n;
+            memcpy(slot.buf, line, n);
             if (xQueueSendToBack(ws_tx_q, &slot, 0) != pdPASS) {
                 atomic_fetch_add_explicit(&frames_ws_dropped, 1,
                                          memory_order_relaxed);

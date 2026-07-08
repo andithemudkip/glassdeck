@@ -25,6 +25,7 @@ import argparse
 import csv
 import datetime as dt
 import os
+import re
 import select
 import subprocess
 import sys
@@ -80,18 +81,35 @@ LEGEND = """
 """
 
 
+# wifi-bridge M4 (ADR 0018) emits every frame with a leading `(<sec>.<us>) `
+# stamp so that a browser-side capture download reproduces the same candump
+# shape scripts/capture.py writes when timestamping on the host. Regex here
+# tolerates both prefixed (wifi-bridge) and unprefixed (can-logger USB) input
+# — see docs/decisions/0018-m4-browser-primary-capture.md § Downstream tolerance.
+_TS_PREFIX_RE = re.compile(rb"^\((\d+)\.(\d+)\)\s+")
+
+
 def parse_slcan_line(line: bytes, timestamp: float):
     """Parse one SLCAN line into a `can.Message`, or return None.
 
     Returns None for empty lines, firmware `# ...` status comments, and
-    malformed frames. Importing `can` lazily so this module loads even
-    when python-can isn't installed yet.
+    malformed frames. If the line carries a wifi-bridge `(<sec>.<us>) `
+    prefix, the parsed send-time replaces the host `timestamp` argument.
+    Importing `can` lazily so this module loads even when python-can
+    isn't installed yet.
     """
     import can
 
     s = line.strip(b"\r\n\x00 \t")
     if not s:
         return None
+    m = _TS_PREFIX_RE.match(s)
+    if m is not None:
+        try:
+            timestamp = float(m.group(1)) + float(m.group(2)) / 1_000_000.0
+        except ValueError:
+            pass  # keep host timestamp
+        s = s[m.end():]
     head = s[:1]
     if head not in (b"t", b"T", b"r", b"R"):
         return None
