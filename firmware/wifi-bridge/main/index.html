@@ -7,11 +7,12 @@
 <style>
   :root {
     --bg: #0b0d10;
-    --fg: #d8dee4;
+    --fg: #ede7de;
     --dim: #6b7480;
     --ok: #7cd992;
     --warn: #e6b06a;
     --err: #e07070;
+    --accent: #f1b500;
     --hair: #1a1e24;
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   }
@@ -22,17 +23,26 @@
     background: var(--bg); color: var(--fg);
     font-family: var(--mono);
     font-size: 13px; line-height: 1.35;
+    font-variant-numeric: tabular-nums;
     -webkit-text-size-adjust: 100%;
     overscroll-behavior: none;
   }
-  body { display: flex; flex-direction: column; height: 100dvh; }
+  body {
+    display: flex; flex-direction: column;
+    height: 100dvh;
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+    overflow-x: hidden;
+  }
+
   header {
     flex: 0 0 auto;
     display: grid;
-    grid-template-columns: repeat(6, 1fr);
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 1px;
     background: var(--hair);
     border-bottom: 1px solid var(--hair);
+    padding-top: env(safe-area-inset-top);
   }
   header .cell {
     background: var(--bg);
@@ -40,7 +50,7 @@
     display: flex; flex-direction: column;
     min-width: 0;
   }
-  header .k { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+  header .k { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; }
   header .v { color: var(--fg); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   header .v.warn { color: var(--warn); }
   header .v.err  { color: var(--err); }
@@ -50,34 +60,152 @@
   main#mid {
     flex: 1 1 auto;
     min-height: 0;
-    display: flex; align-items: center; justify-content: center;
-    color: var(--dim); font-size: 11px;
-    padding: 8px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    grid-auto-rows: minmax(72px, auto);
+    /* Keep rows at content height; free vertical space collects at the
+       bottom of the panel rather than inflating each cell into a
+       half-empty box. */
+    align-content: start;
+    gap: 1px;
+    background: var(--hair);
+    padding: 1px;
+    overflow-y: auto;
+    overflow-x: hidden;
   }
-
-  footer#ticker {
-    flex: 0 0 45vh;
-    overflow: hidden;
+  .sig {
+    background: var(--bg);
+    padding: 10px 12px 12px 12px;
+    position: relative;
     display: flex; flex-direction: column;
-    border-top: 1px solid var(--hair);
-    padding: 4px 6px 6px 6px;
-    font-size: 12px;
-    /* newest at bottom; older rows above, fading toward dim */
+    min-width: 0;
+    /* NB: no `overflow: hidden` — combined with grid-auto-rows: minmax(72px, auto)
+       it drives the cell's min-content to 0, so the row stops growing and the
+       hero RPM number overflows/clips. The peak is `position: absolute` with
+       `right`/`bottom` inside this container, so it stays inside without
+       clipping. Long values are clipped by the row's own `overflow: hidden`. */
   }
-  #ticker .frame {
-    white-space: pre;
-    overflow: hidden; text-overflow: clip;
-    letter-spacing: -0.01em;
+  .sig .meta {
+    color: var(--dim);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    display: flex; justify-content: space-between;
+    gap: 8px;
+  }
+  .sig .meta .name { color: var(--dim); }
+  .sig .meta .loc  { color: var(--dim); opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sig .row {
+    display: flex; align-items: baseline;
+    gap: 6px;
+    margin-top: 6px;
+    min-width: 0;
+    /* `overflow: clip` (not `hidden`) — hidden creates a formatting context
+       that collapses the flex row's cross-size below the val's line-height,
+       chopping large values in half vertically. `clip` clips visually
+       without breaking cross-axis sizing. Chrome ≥90 / Safari ≥16. */
+    overflow: clip;
+  }
+  .sig .val {
+    color: var(--fg);
+    font-size: clamp(22px, 4.4vw, 30px);
+    font-weight: 500;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+    flex: 0 1 auto;
+    min-width: 0;
+    /* Horizontal clip is done by `.row`'s own `overflow: hidden` — clipping
+       here would drive the val's min-content to 0 and collapse the grid row
+       height, chopping the hero value in half vertically. */
+    transition: color 150ms linear, opacity 300ms linear;
+  }
+  .sig .val.pulse { color: var(--accent); transition: color 0s; }
+  .sig .val.stale { opacity: 0.4; }
+  .sig .val.enum-ok   { color: var(--ok); }
+  .sig .val.enum-err  { color: var(--err); }
+  .sig .unit {
+    color: var(--dim); font-size: 11px;
+    letter-spacing: 0.03em;
+  }
+  /* Peak lives out-of-flow in the bottom-right corner (just above the
+     1-px freshness bar) so it never fights the value for row width. */
+  .sig .peak {
+    position: absolute;
+    bottom: 4px;
+    right: 10px;
+    color: var(--dim);
+    font-size: 10px;
+    opacity: 0.7;
+    white-space: nowrap;
+    letter-spacing: 0.03em;
+    pointer-events: none;
+  }
+  .sig .fresh {
+    position: absolute;
+    left: 0; bottom: 0;
+    height: 1px;
+    background: var(--accent);
+    width: 0%;
+    transition: width 60ms linear;
+  }
+  /* Bootstrap state before first frame: value is a single em-dash. */
+  .sig.empty .val { color: var(--dim); }
+
+  /* Hero — RPM span 2 columns when there's room, so the tach number reads big. */
+  .sig.hero { grid-column: span 1; }
+  @media (min-width: 720px) {
+    .sig.hero { grid-column: span 2; }
+    .sig.hero .val { font-size: clamp(28px, 5vw, 40px); }
   }
 
-  /* small connection pip in the header */
+  /* Bus liveness — a 1-px amber line at the bottom edge of the header
+     that pulses to full brightness on frame arrival and decays to zero
+     when the bus goes quiet. Same visual language as the per-cell
+     freshness bars; scaled to the whole surface. Ambient, non-noisy;
+     replaces the raw-frame ticker as the "yes, frames are arriving"
+     signal. Dev/debug view will get the raw ticker on its own route. */
+  #liveness {
+    position: absolute;
+    left: 0; right: 0;
+    bottom: 0;
+    height: 1px;
+    background: var(--accent);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 240ms linear;
+  }
+  header { position: relative; }
+
   .pip { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--dim); vertical-align: middle; margin-right: 6px; }
   .pip.ok  { background: var(--ok); }
   .pip.warn{ background: var(--warn); }
   .pip.err { background: var(--err); }
 
-  @media (max-width: 520px) {
-    header { grid-template-columns: repeat(3, 1fr); }
+  /* Portrait phones: 2 columns, RPM full-width. */
+  @media (max-width: 720px) {
+    main#mid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .sig.hero { grid-column: 1 / -1; }
+    .sig.hero .val { font-size: clamp(32px, 9vw, 48px); }
+  }
+  /* Small phones: single column. */
+  @media (max-width: 420px) {
+    header { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    main#mid { grid-template-columns: 1fr; }
+    .sig .val { font-size: clamp(24px, 8vw, 30px); }
+  }
+  /* Landscape phones — squat: give the panel more columns. */
+  @media (orientation: landscape) and (max-height: 500px) {
+    header { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+    main#mid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .sig.hero { grid-column: span 1; }
+    .sig.hero .val { font-size: clamp(24px, 3.5vh, 32px); }
+    .sig .val { font-size: clamp(18px, 3vh, 24px); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sig .val, .sig .fresh { transition: none; }
+    .sig .val.pulse { color: var(--fg); }
   }
 </style>
 </head>
@@ -90,18 +218,17 @@
   <div class="cell"><span class="k">twai</span><span class="v" id="twai">—</span></div>
   <div class="cell"><span class="k">frames seen</span><span class="v" id="seen">0</span></div>
   <div class="cell"><span class="k">ws dropped</span><span class="v" id="dropped">0</span></div>
+  <div id="liveness"></div>
 </header>
 
-<main id="mid">decoded panel — coming in milestone 6</main>
-
-<footer id="ticker"></footer>
+<main id="mid"></main>
 
 <script>
 (() => {
-  const TICKER_MAX = 100;
-  const DIM_FLOOR = 0.30;
+  const STALE_MS = 500;
+  // Liveness pulse: bump on frame arrival, decay ~240 ms via CSS transition.
+  const LIVENESS_HOLD_MS = 240;
 
-  const ticker = document.getElementById("ticker");
   const wsPip = document.getElementById("wsPip");
   const wsText = document.getElementById("wsText");
   const $rssi = document.getElementById("rssi");
@@ -109,11 +236,12 @@
   const $twai = document.getElementById("twai");
   const $seen = document.getElementById("seen");
   const $dropped = document.getElementById("dropped");
+  const $mid = document.getElementById("mid");
+  const $liveness = document.getElementById("liveness");
 
   let framesSinceConnect = 0;
   let lastHealth = null;
-  let pending = [];
-  let rafScheduled = false;
+  let lastLivenessBump = 0;
 
   function fmtUptime(ms) {
     const s = Math.floor(ms / 1000);
@@ -124,41 +252,249 @@
     return h > 0 ? `${h}:${pad(m)}:${pad(ss)}` : `${m}:${pad(ss)}`;
   }
 
-  function drainRaf() {
-    rafScheduled = false;
-    if (pending.length === 0) return;
-    const frag = document.createDocumentFragment();
-    for (const line of pending) {
-      const div = document.createElement("div");
-      div.className = "frame";
-      div.textContent = line;
-      frag.appendChild(div);
+  // Bus liveness pulse. Every incoming frame kicks the header's bottom-edge
+  // amber line to full opacity; when frames stop, the CSS transition fades
+  // it out over LIVENESS_HOLD_MS. Ambient replacement for the raw ticker —
+  // proves "frames are streaming" without taking any decoded panel real estate.
+  function bumpLiveness() {
+    const now = performance.now();
+    // Only re-touch the DOM every ~16 ms so a 1000 fps bus doesn't force
+    // a style recalc per frame. The CSS transition holds the opacity high
+    // between bumps so the visual read stays steady.
+    if (now - lastLivenessBump < 16) return;
+    lastLivenessBump = now;
+    $liveness.style.opacity = "1";
+    setTimeout(() => {
+      // Only clear if no newer bump has landed — otherwise let the later
+      // bump keep it lit.
+      if (performance.now() - lastLivenessBump >= LIVENESS_HOLD_MS - 20) {
+        $liveness.style.opacity = "0";
+      }
+    }, LIVENESS_HOLD_MS);
+  }
+
+  // -------------------------------------------------------------------------
+  // Decoded panel — the M6 addition. SIGNALS is codegen'd from signals.yaml.
+  // -------------------------------------------------------------------------
+
+  /* __SIGNALS_JS__ */
+
+  // Order signals for the panel: rider-relevance first, then diagnostic.
+  // Any signal in the codegen output that isn't listed here appears after.
+  const DISPLAY_ORDER = [
+    "rpm", "gear_position", "wheel_speed_rear", "wheel_speed_front",
+    "throttle_position", "coolant_temp",
+    "kill_switch", "side_stand", "clutch",
+    "engine_on_counter", "engine_off_counter",
+  ];
+  const HERO = "rpm";
+  const LABEL = {
+    rpm: "RPM",
+    gear_position: "GEAR",
+    wheel_speed_rear: "WHEEL R",
+    wheel_speed_front: "WHEEL F",
+    throttle_position: "THROTTLE",
+    coolant_temp: "COOLANT",
+    kill_switch: "KILL",
+    side_stand: "STAND",
+    clutch: "CLUTCH",
+    engine_on_counter: "ENG-ON",
+    engine_off_counter: "ENG-OFF",
+  };
+  // Which enum/bool value is the "OK" polarity (green vs red).
+  const OK_VALUES = new Set(["RUN", "UP", "RELEASED"]);
+  const ERR_VALUES = new Set(["STOP", "DOWN", "PULLED"]);
+
+  // Compact location: "120 D0:D1" style. Dev-instrument diagnostic —
+  // must fit in the meta row without ellipsis on the smallest supported
+  // cell (170 px). The 0x prefix is dropped; 3-hex-digit arb IDs are
+  // recognizable as such by any reader who cares about them.
+  function locStr(sig) {
+    const arb = sig.arb.toString(16).toUpperCase().padStart(3, "0");
+    if (sig.bytes) {
+      const bl = sig.bytes.map(b => "D" + b).join(":");
+      if (sig.bit_length !== 8 * sig.bytes.length) {
+        return `${arb} ${bl} b${sig.bit_offset}+${sig.bit_length}`;
+      }
+      return `${arb} ${bl}`;
     }
-    pending.length = 0;
-    ticker.appendChild(frag);
-    while (ticker.childElementCount > TICKER_MAX) {
-      ticker.removeChild(ticker.firstElementChild);
+    if (sig.bit_length === 1) return `${arb} D${sig.byte}.${sig.bit_offset}`;
+    if (sig.bit_length === 4) return `${arb} D${sig.byte} ${sig.bit_offset === 4 ? "hi" : "lo"}`;
+    if (sig.bit_length === 8 && sig.bit_offset === 0) return `${arb} D${sig.byte}`;
+    return `${arb} D${sig.byte} b${sig.bit_offset}+${sig.bit_length}`;
+  }
+
+  // Port of scripts/signals.py Signal._extract_raw. Returns int (raw) or null.
+  function extractRaw(sig, data) {
+    if (sig.bytes) {
+      for (const b of sig.bytes) if (b >= data.length) return null;
+      const order = sig.order === "big" ? sig.bytes : sig.bytes.slice().reverse();
+      let value = 0;
+      for (const b of order) value = (value << 8) | data[b];
+      const fullSlot = sig.bit_length === 8 * sig.bytes.length;
+      if (!fullSlot || sig.bit_offset !== 0) {
+        const mask = (1 << sig.bit_length) - 1;
+        // >>> 0 for correct behavior with 16-bit+ values on the boundary
+        // where <<16 would go negative in JS's signed 32-bit int semantics.
+        value = ((value >>> sig.bit_offset) & mask) >>> 0;
+      }
+      return value;
     }
-    // Repaint opacity across all rows: oldest (index 0) dimmest, newest brightest.
-    const n = ticker.childElementCount;
-    const kids = ticker.children;
-    if (n <= 1) {
-      if (n === 1) kids[0].style.opacity = "1";
-    } else {
-      for (let i = 0; i < n; i++) {
-        const t = i / (n - 1);
-        kids[i].style.opacity = (DIM_FLOOR + (1 - DIM_FLOOR) * t).toFixed(3);
+    if (sig.byte >= data.length) return null;
+    const mask = (1 << sig.bit_length) - 1;
+    return (data[sig.byte] >> sig.bit_offset) & mask;
+  }
+
+  function scaled(sig, raw) {
+    return raw * sig.scale + sig.offset;
+  }
+
+  function formatValue(sig, raw) {
+    // Match scripts/signals.py Signal.extract/format semantics.
+    if ((sig.enc === "bool" || sig.enc === "enum") && sig.values) {
+      return sig.values[String(raw)] ?? String(raw);
+    }
+    const v = scaled(sig, raw);
+    // One decimal for scale<1 (coolant, wheel speeds), integer otherwise.
+    return sig.scale < 1 ? v.toFixed(1) : Math.round(v).toString();
+  }
+
+  function isDiscrete(sig) {
+    return sig.enc === "bool" || sig.enc === "enum";
+  }
+
+  // Build DOM + per-signal state.
+  const byArb = new Map();
+  const state = new Map();
+
+  function makeCell(sig) {
+    const div = document.createElement("div");
+    div.className = "sig empty" + (sig.name === HERO ? " hero" : "");
+    div.dataset.name = sig.name;
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    const nameEl = document.createElement("span");
+    nameEl.className = "name";
+    nameEl.textContent = LABEL[sig.name] ?? sig.name;
+    const locEl = document.createElement("span");
+    locEl.className = "loc";
+    locEl.textContent = locStr(sig);
+    meta.appendChild(nameEl); meta.appendChild(locEl);
+    const row = document.createElement("div");
+    row.className = "row";
+    const val = document.createElement("span");
+    val.className = "val";
+    val.textContent = "—";
+    row.appendChild(val);
+    if (sig.unit) {
+      const unit = document.createElement("span");
+      unit.className = "unit";
+      unit.textContent = sig.unit;
+      row.appendChild(unit);
+    }
+    const peak = document.createElement("span");
+    peak.className = "peak";
+    peak.textContent = "";
+    row.appendChild(peak);
+    const fresh = document.createElement("div");
+    fresh.className = "fresh";
+    div.appendChild(meta); div.appendChild(row); div.appendChild(fresh);
+    return { div, val, peak, fresh };
+  }
+
+  // Emit cells in DISPLAY_ORDER, with any codegen'd signals not listed appended.
+  const known = new Set(SIGNALS.map(s => s.name));
+  const ordered = [
+    ...DISPLAY_ORDER.filter(n => known.has(n)),
+    ...SIGNALS.map(s => s.name).filter(n => !DISPLAY_ORDER.includes(n)),
+  ];
+  const bySigName = new Map(SIGNALS.map(s => [s.name, s]));
+
+  for (const name of ordered) {
+    const sig = bySigName.get(name);
+    const nodes = makeCell(sig);
+    $mid.appendChild(nodes.div);
+    state.set(name, {
+      sig, nodes,
+      lastUpdate: 0,       // performance.now() timestamp
+      peakRaw: null,       // max raw value seen, null for discrete
+      pulseUntil: 0,
+    });
+    if (!byArb.has(sig.arb)) byArb.set(sig.arb, []);
+    byArb.get(sig.arb).push(sig);
+  }
+
+  // SLCAN parse: 't' + 3hex arb + 1hex dlc + (dlc*2 hex) + '\r' (already stripped).
+  function parseSlcan(line) {
+    if (line.length < 5 || line[0] !== "t") return null;
+    const arb = parseInt(line.substring(1, 4), 16);
+    if (!Number.isFinite(arb)) return null;
+    const dlc = parseInt(line[4], 16);
+    if (!Number.isFinite(dlc)) return null;
+    const n = Math.min(dlc, 8);
+    if (line.length < 5 + n * 2) return null;
+    const data = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      data[i] = parseInt(line.substring(5 + i * 2, 7 + i * 2), 16);
+    }
+    return { arb, data };
+  }
+
+  function routeFrame(line) {
+    const p = parseSlcan(line);
+    if (!p) return;
+    const sigs = byArb.get(p.arb);
+    if (!sigs) return;
+    const now = performance.now();
+    for (const sig of sigs) {
+      const raw = extractRaw(sig, p.data);
+      if (raw === null) continue;
+      const st = state.get(sig.name);
+      st.lastUpdate = now;
+      st.pulseUntil = now + 150;
+      st.nodes.val.textContent = formatValue(sig, raw);
+      if (st.nodes.div.classList.contains("empty")) {
+        st.nodes.div.classList.remove("empty");
+      }
+      // Enum/bool color polarity.
+      if (isDiscrete(sig) && sig.values) {
+        const label = sig.values[String(raw)];
+        st.nodes.val.classList.toggle("enum-ok", OK_VALUES.has(label));
+        st.nodes.val.classList.toggle("enum-err", ERR_VALUES.has(label));
+      }
+      // Peak (scalars only).
+      if (!isDiscrete(sig)) {
+        if (st.peakRaw === null || raw > st.peakRaw) {
+          st.peakRaw = raw;
+          const peakStr = formatValue(sig, raw);
+          st.nodes.peak.textContent = "▲ " + peakStr;
+        }
       }
     }
   }
 
-  function pushFrame(line) {
-    pending.push(line);
-    framesSinceConnect++;
-    if (!rafScheduled) {
-      rafScheduled = true;
-      requestAnimationFrame(drainRaf);
+  // Shared RAF tick: pulse decay + freshness bar + stale fade.
+  function panelTick() {
+    const now = performance.now();
+    for (const st of state.values()) {
+      const dt = now - st.lastUpdate;
+      // Pulse: brief amber flash on update, then off.
+      if (now < st.pulseUntil) st.nodes.val.classList.add("pulse");
+      else st.nodes.val.classList.remove("pulse");
+      // Freshness bar decays from 100% at t=0 to 0% at t=STALE_MS.
+      if (st.lastUpdate === 0) {
+        st.nodes.fresh.style.width = "0%";
+        st.nodes.val.classList.remove("stale");
+      } else if (dt >= STALE_MS) {
+        st.nodes.fresh.style.width = "0%";
+        st.nodes.val.classList.add("stale");
+      } else {
+        const pct = 100 * (1 - dt / STALE_MS);
+        st.nodes.fresh.style.width = pct.toFixed(1) + "%";
+        st.nodes.val.classList.remove("stale");
+      }
     }
+    requestAnimationFrame(panelTick);
   }
 
   // --- WebSocket ---
@@ -183,12 +519,15 @@
       setWs("connected", "ok");
     };
     ws.onmessage = (ev) => {
-      // Payload is one SLCAN line terminated by \r. Strip trailing CR/LF.
       let line = typeof ev.data === "string" ? ev.data : "";
       while (line.length && (line.charCodeAt(line.length - 1) === 13 || line.charCodeAt(line.length - 1) === 10)) {
         line = line.slice(0, -1);
       }
-      if (line.length) pushFrame(line);
+      if (line.length) {
+        framesSinceConnect++;
+        bumpLiveness();
+        routeFrame(line);
+      }
     };
     ws.onerror = () => { /* onclose will fire */ };
     ws.onclose = () => {
@@ -208,9 +547,8 @@
       if (!r.ok) throw new Error("http " + r.status);
       const j = await r.json();
       lastHealth = j;
-      framesSinceConnect = 0;   // seen counter comes from server whenever available
+      framesSinceConnect = 0;
 
-      // RSSI
       if (j.ap_client_rssi_dbm === null || j.ap_client_rssi_dbm === undefined) {
         $rssi.textContent = "—";
         $rssi.className = "v mute";
@@ -218,25 +556,19 @@
         $rssi.textContent = j.ap_client_rssi_dbm + " dBm";
         $rssi.className = "v";
       }
-      // Uptime
       $uptime.textContent = fmtUptime(j.uptime_ms || 0);
-      // TWAI
       $twai.textContent = j.twai_state || "—";
       $twai.className = "v " + (j.twai_state === "running" ? "ok"
                               : j.twai_state === "bus_off" ? "err" : "warn");
-      // Frames seen
       $seen.textContent = (j.frames_seen || 0).toLocaleString();
-      // WS dropped — the ADR-blessed "capture degraded" signal
       const dropped = j.frames_ws_dropped || 0;
       $dropped.textContent = dropped.toLocaleString();
       $dropped.className = "v " + (dropped > 0 ? "warn" : "");
     } catch (e) {
-      // /health failed — leave last values, mark mute
       $rssi.className = $uptime.className = $twai.className = "v mute";
     }
   }
 
-  // Bump seen counter locally between health polls so it feels live.
   function tickLocal() {
     if (lastHealth) {
       const est = (lastHealth.frames_seen || 0) + framesSinceConnect;
@@ -249,6 +581,7 @@
   pollHealth();
   setInterval(pollHealth, 1000);
   requestAnimationFrame(tickLocal);
+  requestAnimationFrame(panelTick);
 })();
 </script>
 </body>
