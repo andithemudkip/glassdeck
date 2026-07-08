@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>bike-dash</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --fg: #d8dee4;
+    --dim: #6b7480;
+    --ok: #7cd992;
+    --warn: #e6b06a;
+    --err: #e07070;
+    --hair: #1a1e24;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    height: 100%; width: 100%;
+    background: var(--bg); color: var(--fg);
+    font-family: var(--mono);
+    font-size: 13px; line-height: 1.35;
+    -webkit-text-size-adjust: 100%;
+    overscroll-behavior: none;
+  }
+  body { display: flex; flex-direction: column; height: 100dvh; }
+  header {
+    flex: 0 0 auto;
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 1px;
+    background: var(--hair);
+    border-bottom: 1px solid var(--hair);
+  }
+  header .cell {
+    background: var(--bg);
+    padding: 6px 8px;
+    display: flex; flex-direction: column;
+    min-width: 0;
+  }
+  header .k { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+  header .v { color: var(--fg); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  header .v.warn { color: var(--warn); }
+  header .v.err  { color: var(--err); }
+  header .v.ok   { color: var(--ok); }
+  header .v.mute { color: var(--dim); }
+
+  main#mid {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--dim); font-size: 11px;
+    padding: 8px;
+  }
+
+  footer#ticker {
+    flex: 0 0 45vh;
+    overflow: hidden;
+    display: flex; flex-direction: column;
+    border-top: 1px solid var(--hair);
+    padding: 4px 6px 6px 6px;
+    font-size: 12px;
+    /* newest at bottom; older rows above, fading toward dim */
+  }
+  #ticker .frame {
+    white-space: pre;
+    overflow: hidden; text-overflow: clip;
+    letter-spacing: -0.01em;
+  }
+
+  /* small connection pip in the header */
+  .pip { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--dim); vertical-align: middle; margin-right: 6px; }
+  .pip.ok  { background: var(--ok); }
+  .pip.warn{ background: var(--warn); }
+  .pip.err { background: var(--err); }
+
+  @media (max-width: 520px) {
+    header { grid-template-columns: repeat(3, 1fr); }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="cell"><span class="k">ws</span><span class="v" id="wsState"><span class="pip" id="wsPip"></span><span id="wsText">…</span></span></div>
+  <div class="cell"><span class="k">rssi</span><span class="v" id="rssi">—</span></div>
+  <div class="cell"><span class="k">uptime</span><span class="v" id="uptime">—</span></div>
+  <div class="cell"><span class="k">twai</span><span class="v" id="twai">—</span></div>
+  <div class="cell"><span class="k">frames seen</span><span class="v" id="seen">0</span></div>
+  <div class="cell"><span class="k">ws dropped</span><span class="v" id="dropped">0</span></div>
+</header>
+
+<main id="mid">decoded panel — coming in milestone 6</main>
+
+<footer id="ticker"></footer>
+
+<script>
+(() => {
+  const TICKER_MAX = 100;
+  const DIM_FLOOR = 0.30;
+
+  const ticker = document.getElementById("ticker");
+  const wsPip = document.getElementById("wsPip");
+  const wsText = document.getElementById("wsText");
+  const $rssi = document.getElementById("rssi");
+  const $uptime = document.getElementById("uptime");
+  const $twai = document.getElementById("twai");
+  const $seen = document.getElementById("seen");
+  const $dropped = document.getElementById("dropped");
+
+  let framesSinceConnect = 0;
+  let lastHealth = null;
+  let pending = [];
+  let rafScheduled = false;
+
+  function fmtUptime(ms) {
+    const s = Math.floor(ms / 1000);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const ss = s % 60;
+    const pad = n => n < 10 ? "0" + n : "" + n;
+    return h > 0 ? `${h}:${pad(m)}:${pad(ss)}` : `${m}:${pad(ss)}`;
+  }
+
+  function drainRaf() {
+    rafScheduled = false;
+    if (pending.length === 0) return;
+    const frag = document.createDocumentFragment();
+    for (const line of pending) {
+      const div = document.createElement("div");
+      div.className = "frame";
+      div.textContent = line;
+      frag.appendChild(div);
+    }
+    pending.length = 0;
+    ticker.appendChild(frag);
+    while (ticker.childElementCount > TICKER_MAX) {
+      ticker.removeChild(ticker.firstElementChild);
+    }
+    // Repaint opacity across all rows: oldest (index 0) dimmest, newest brightest.
+    const n = ticker.childElementCount;
+    const kids = ticker.children;
+    if (n <= 1) {
+      if (n === 1) kids[0].style.opacity = "1";
+    } else {
+      for (let i = 0; i < n; i++) {
+        const t = i / (n - 1);
+        kids[i].style.opacity = (DIM_FLOOR + (1 - DIM_FLOOR) * t).toFixed(3);
+      }
+    }
+  }
+
+  function pushFrame(line) {
+    pending.push(line);
+    framesSinceConnect++;
+    if (!rafScheduled) {
+      rafScheduled = true;
+      requestAnimationFrame(drainRaf);
+    }
+  }
+
+  // --- WebSocket ---
+  let ws = null;
+  let backoffMs = 1000;
+
+  function setWs(state, klass) {
+    wsText.textContent = state;
+    wsPip.className = "pip " + klass;
+  }
+
+  function connect() {
+    setWs("connecting", "warn");
+    try {
+      ws = new WebSocket(`ws://${location.host}/stream`);
+    } catch (e) {
+      scheduleReconnect();
+      return;
+    }
+    ws.onopen = () => {
+      backoffMs = 1000;
+      setWs("connected", "ok");
+    };
+    ws.onmessage = (ev) => {
+      // Payload is one SLCAN line terminated by \r. Strip trailing CR/LF.
+      let line = typeof ev.data === "string" ? ev.data : "";
+      while (line.length && (line.charCodeAt(line.length - 1) === 13 || line.charCodeAt(line.length - 1) === 10)) {
+        line = line.slice(0, -1);
+      }
+      if (line.length) pushFrame(line);
+    };
+    ws.onerror = () => { /* onclose will fire */ };
+    ws.onclose = () => {
+      setWs("disconnected", "err");
+      scheduleReconnect();
+    };
+  }
+  function scheduleReconnect() {
+    setTimeout(connect, backoffMs);
+    backoffMs = Math.min(backoffMs * 2, 5000);
+  }
+
+  // --- /health poll ---
+  async function pollHealth() {
+    try {
+      const r = await fetch("/health", { cache: "no-store" });
+      if (!r.ok) throw new Error("http " + r.status);
+      const j = await r.json();
+      lastHealth = j;
+      framesSinceConnect = 0;   // seen counter comes from server whenever available
+
+      // RSSI
+      if (j.ap_client_rssi_dbm === null || j.ap_client_rssi_dbm === undefined) {
+        $rssi.textContent = "—";
+        $rssi.className = "v mute";
+      } else {
+        $rssi.textContent = j.ap_client_rssi_dbm + " dBm";
+        $rssi.className = "v";
+      }
+      // Uptime
+      $uptime.textContent = fmtUptime(j.uptime_ms || 0);
+      // TWAI
+      $twai.textContent = j.twai_state || "—";
+      $twai.className = "v " + (j.twai_state === "running" ? "ok"
+                              : j.twai_state === "bus_off" ? "err" : "warn");
+      // Frames seen
+      $seen.textContent = (j.frames_seen || 0).toLocaleString();
+      // WS dropped — the ADR-blessed "capture degraded" signal
+      const dropped = j.frames_ws_dropped || 0;
+      $dropped.textContent = dropped.toLocaleString();
+      $dropped.className = "v " + (dropped > 0 ? "warn" : "");
+    } catch (e) {
+      // /health failed — leave last values, mark mute
+      $rssi.className = $uptime.className = $twai.className = "v mute";
+    }
+  }
+
+  // Bump seen counter locally between health polls so it feels live.
+  function tickLocal() {
+    if (lastHealth) {
+      const est = (lastHealth.frames_seen || 0) + framesSinceConnect;
+      $seen.textContent = est.toLocaleString();
+    }
+    requestAnimationFrame(tickLocal);
+  }
+
+  connect();
+  pollHealth();
+  setInterval(pollHealth, 1000);
+  requestAnimationFrame(tickLocal);
+})();
+</script>
+</body>
+</html>

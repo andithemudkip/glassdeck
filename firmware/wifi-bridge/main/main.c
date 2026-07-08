@@ -2,8 +2,9 @@
 // the Husqvarna Svartpilen 401. See docs/decisions/0016-wifi-dev-capture-and-
 // live-view.md and firmware/wifi-bridge/README.md for the full plan.
 //
-// State at milestone 3:
+// State at milestone 5:
 //   - WiFi soft-AP (SSID `bike-dash-<lower6 of MAC>`, WPA2 from wifi_secrets.h)
+//   - GET  /         gzipped live-view HTML (bus-health header + raw ticker)
 //   - GET  /health   JSON with uptime, TWAI health, frame counters, WS state
 //   - POST /ota      raw firmware.bin → rollback-protected OTA update
 //   - GET  /stream   WebSocket, one CAN frame per text message, SLCAN wire
@@ -126,7 +127,7 @@ static void print_boot_header(void) {
     // `#`-prefixed and `\r`-terminated so the SLCAN parser downstream ignores
     // these lines cleanly, but they still render on `pio device monitor` for
     // the operator to copy the SSID/password into the phone.
-    printf("# ---- wifi-bridge (milestone 3) ----\r\n");
+    printf("# ---- wifi-bridge (milestone 5) ----\r\n");
     printf("# idf=%s\r\n", esp_get_idf_version());
     printf("# psram_bytes=%u\r\n", (unsigned)esp_psram_get_size());
     printf("# can_bitrate_kbps=%d can_tx=GPIO%d can_rx=GPIO%d mode=listen-only\r\n",
@@ -221,8 +222,23 @@ static void wifi_ap_init(void) {
 }
 
 // -----------------------------------------------------------------------------
-// HTTP server + /health + POST /ota
+// HTTP server + / + /health + POST /ota
 // -----------------------------------------------------------------------------
+
+// Live view is gzipped at build time (see main/CMakeLists.txt) and embedded as
+// a binary blob via EMBED_FILES. The linker exposes it as two symbols bracketing
+// the payload.
+extern const uint8_t index_html_gz_start[] asm("_binary_index_html_gz_start");
+extern const uint8_t index_html_gz_end[]   asm("_binary_index_html_gz_end");
+
+static esp_err_t root_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+    // Small file, cheap to re-fetch; avoid stale HTML surviving an OTA update.
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+    const size_t len = (size_t)(index_html_gz_end - index_html_gz_start);
+    return httpd_resp_send(req, (const char *)index_html_gz_start, len);
+}
 
 // Static, not on stack: HTTPD_DEFAULT_CONFIG.stack_size is 4 KB, so a 4 KB
 // local buffer would blow the httpd task's stack. httpd is single-threaded per
@@ -458,6 +474,14 @@ static void http_server_start(void) {
     // would stall the sender and the RX loop's queue fills fast.
     cfg.send_wait_timeout = 1;
     ESP_ERROR_CHECK(httpd_start(&s_server, &cfg));
+
+    static const httpd_uri_t root_uri = {
+        .uri = "/",
+        .method = HTTP_GET,
+        .handler = root_handler,
+        .user_ctx = NULL,
+    };
+    ESP_ERROR_CHECK(httpd_register_uri_handler(s_server, &root_uri));
 
     static const httpd_uri_t health_uri = {
         .uri = "/health",

@@ -4,7 +4,7 @@ Phase 2+ untethered CAN capture + browser-served live view for the 2020 Husqvarn
 
 Reads frames off the bike's CAN bus, streams them out over WiFi as SLCAN over WebSocket, and serves a static browser page that decodes them live. Replaces the USB tether for ride captures; `can-logger/` stays alive as the desk USB-CDC path.
 
-**Status:** milestones 1–3 code-complete (compile-verified, bench check pending hardware plug-in). See § Milestones for what's staged and where we are, § Current state for the next step.
+**Status:** milestones 1–3, 5 code-complete (compile-verified, bench check pending hardware plug-in). Milestone 4 (PSRAM ring + `/capture` download) still waits on the F7 power perfboard. See § Milestones for what's staged and where we are, § Current state for the next step.
 
 ## Goal
 
@@ -63,9 +63,10 @@ Ordered so each step is independently verifiable. USB-powered at the desk is fin
 
 ### 5 — Static HTML shell + raw-frame ticker
 
-- [ ] One HTML file, vanilla JS, no build step, embedded in the binary (SPIFFS image or `EMBED_FILES`), gzipped.
-- [ ] Layout skeleton per ADR 0016 § Live view: bus-health header (RSSI, uptime, frames seen, frames dropped) up top; empty middle; raw-frame ticker at the bottom (last N frames, dimmest-to-brightest by age).
-- [ ] Connects to `/stream`, renders raw frames.
+- [x] One HTML file, vanilla JS, no build step, embedded in the binary via `EMBED_FILES`, gzipped at CMake configure time (~3 KB on the wire).
+- [x] Layout skeleton per ADR 0016 § Live view: bus-health header (WS state, RSSI, uptime, TWAI state, frames seen, WS-dropped) up top; empty middle placeholder for M6's decoded panel; raw-frame ticker at the bottom (last 100 frames, dimmest-to-brightest by age).
+- [x] Connects to `/stream`, renders raw frames; polls `/health` every 1 s for header state; auto-reconnects on WS drop with 1→2→4→5 s backoff.
+- [x] **Added mid-milestone:** eager `execute_process` gzip + `.S` generation in `main/CMakeLists.txt`. PlatformIO's SCons wrapper scans sources at CMake configure time and can't consume ninja custom-command outputs, so both the `.gz` and the ESP-IDF-generated embed `.S` must exist on disk before `idf_component_register` returns. Mirrors what `espidf.py` does internally for mbedtls's cert bundle.
 
 **Done when:** phone browser at `http://192.168.4.1/` shows a scrolling raw-frame ticker with a bus-health header that updates. No decoding yet — this validates the browser side of the transport.
 
@@ -87,12 +88,14 @@ Ordered so each step is independently verifiable. USB-powered at the desk is fin
 
 ## Current state
 
-Milestones 1–3 code-complete and compile-clean. Bench verification against the bike is now the next step — all three milestones get validated in one shot by flashing wifi-bridge, joining the AP, and running `websocat -n ws://192.168.4.1/stream | python scripts/capture.py --stdin --label ws-smoke` for 60 s with the bike on, then `python scripts/inventory_ids.py logs/YYYY-MM-DD-ws-smoke/capture.log` — expected output matches prior USB captures (11 always-on IDs, familiar periods). Untethered ride captures still wait on the F7 power perfboard (milestone 4+).
+Milestones 1–3 and 5 code-complete and compile-clean. Bench verification against the bike is now the next step — one flash validates the WS transport (M3) and the browser view (M5) together: flash wifi-bridge, join the AP, open `http://192.168.4.1/` on the phone with the bike on, and expect the ticker to fill with SLCAN lines while the header ticks. Regression check on M3: `websocat -n ws://192.168.4.1/stream | python scripts/capture.py --stdin --label ws-smoke` for 60 s, then `python scripts/inventory_ids.py logs/YYYY-MM-DD-ws-smoke/capture.log` — expected output matches prior USB captures (11 always-on IDs, familiar periods).
+
+Milestone 4 (PSRAM ring + `/capture`) and untethered ride captures still wait on the F7 power perfboard.
 
 ## Deferred / open
 
 - **Multi-client WS.** ADR 0016 doesn't require it. Only decide if a use case surfaces (e.g. laptop + phone both subscribed).
-- **Live view design pass.** Layout, typography, decoded-panel visual language — deferred until milestone 5 lands and there's something concrete to iterate on.
+- **Live view design pass.** Layout, typography, decoded-panel visual language — the M5 skeleton is intentionally utilitarian (dark background, monospace, six labeled cells in the header). Iterate on the visual language once M6's decoded panel lands and we have real content to arrange.
 - **STA-mode fallback.** ADR 0016 rejected ESP-as-STA for the dev phase but flagged revisiting if a long ride surfaces where keeping phone cellular matters. Not a milestone here; a follow-up ADR when the need appears.
 - **Long-term role vs ADR 0016 § Retirement.** ADR 0016 assumes this target gets deleted once ADR 0014's BLE bridge ships. That's likely too aggressive — WiFi + browser has real long-term value the BLE bridge can't cheaply replicate: high-bandwidth log pull after a ride, diagnostic mode for the production dashboard, a fallback path if BLE fails in the field, and a debug channel that any device with a browser can hit without a native app. When ADR 0014 gets close to shipping, revisit as an amended or superseding ADR — decide then whether this target retires, or stays as a dev/diagnostic sidecar alongside BLE. Nothing to do until then; flagged so the "just delete it" assumption in ADR 0016 doesn't get taken as settled.
 
