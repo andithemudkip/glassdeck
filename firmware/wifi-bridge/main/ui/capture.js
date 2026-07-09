@@ -2,37 +2,48 @@
   // Capture pipeline (M4 / ADR 0018)
   //
   // Browser-primary log sink. The WS handler feeds every raw (prefix-included)
-  // line into onCaptureLine; when a capture is active they get batched into an
-  // OPFS file every FLUSH_INTERVAL_MS. On WS reconnect performBackfill drains
+  // line into onCaptureLine; when a capture is active they get batched into
+  // IndexedDB every FLUSH_INTERVAL_MS. On WS reconnect performBackfill drains
   // the firmware's /capture ring to splice over the gap; an X-Bike-Gap-Ms
   // header from the firmware translates to a `# GAP <ms>` marker in the file
   // (same comment convention as `# MARK` — see M7a).
   //
+  // Storage: IndexedDB (not OPFS) because the ESP32 serves plain HTTP over the
+  // LAN and `navigator.storage.getDirectory` is secure-context-gated on every
+  // phone browser. IDB works in insecure contexts and is available everywhere
+  // we target. On-disk representation is chunk records in the `chunks` store,
+  // reassembled to a Blob on export.
+  //
   // State discipline: lastPersistedTs is the only piece of "resume anywhere"
-  // state, snapshotted to a sidecar OPFS key on every flush so a page reload
+  // state, snapshotted to the sidecar record on every flush so a page reload
   // during a capture picks up cleanly.
   // -------------------------------------------------------------------------
 
-  const SIDECAR_NAME = "active-capture.json";
+  const IDB_NAME = "glassdeck-capture";
+  const IDB_VERSION = 1;
+  const IDB_CAPTURES = "captures";
+  const IDB_CHUNKS = "chunks";
+  const IDB_SIDECAR = "sidecar";
+  const SIDECAR_KEY = "active-capture";
   const FLUSH_INTERVAL_MS = 500;
 
   // idle → recording → resuming → recording; back to idle on Stop/Export.
   let captureState = "idle";
-  let captureFile = null;        // FileSystemFileHandle (OPFS)
-  let captureFileName = null;
+  let captureFileName = null;    // logical name; identifies the IDB records
   let captureStartIso = null;    // ISO string embedded in the exported filename
   let captureStartWallMs = 0;    // Date.now() — persists across reloads for the elapsed counter
   let captureLabel = "";         // sanitized user-supplied label, "" if none
-  let captureOffset = 0;
+  let captureOffset = 0;         // running byte total across all flushed chunks
   let captureFrames = 0;
   let captureGaps = 0;
+  let nextSeq = 0;               // next chunk index for the active capture
   let lastPersistedTs = 0;
   let pendingWrites = [];        // string[] queued for the next flush
   let resumeBuffer = [];         // {raw, ts}[] captured during a reconnect
   let flushScheduled = false;
   let wakeLockRef = null;
 
-  // Filename convention (encoded in the OPFS filename so it survives reloads
+  // Filename convention (also the IDB record key so it survives reloads
   // without extra sidecar state): capture-<iso>[__<label>].log
   // `__` (double underscore) is the label delimiter — chosen over `-` because
   // the ISO string already has dashes, so a single `-` couldn't split cleanly.
@@ -94,7 +105,7 @@
     return `${m}:${ss < 10 ? "0" : ""}${ss}`;
   }
 
-  // Cached count of captures in OPFS, refreshed after Stop / delete / start.
+  // Cached count of captures, refreshed after Stop / delete / start.
   // Drives the Files-button visibility and its (N) badge without needing an
   // async scan on every renderCaptureBar call.
   let captureFileCount = 0;
@@ -135,21 +146,59 @@
     requestAnimationFrame(tickCaptureBar);
   }
 
-  // OPFS may not exist in older browsers or private-mode Safari. If so we
-  // gracefully disable capture — the live view still works.
-  async function opfsRoot() {
-    if (!navigator.storage || !navigator.storage.getDirectory) {
-      throw new Error("OPFS not available in this browser");
-    }
-    return navigator.storage.getDirectory();
+  // IndexedDB open + tiny promisified helpers. The DB has three stores:
+  //   captures — one record per capture, keyed by name (the filename string).
+  //              Carries running size/frames/gaps for the drawer to display
+  //              without summing chunks.
+  //   chunks   — one record per flush, composite key [name, seq]. Value is
+  //              a Uint8Array; concatenated in order for Export.
+  //   sidecar  — singleton at SIDECAR_KEY. Same JSON shape as before —
+  //              carries lastPersistedTs + resume state.
+  //
+  // IDB is available in insecure contexts on every browser we target; it
+  // sidesteps the secure-context gating that made OPFS unavailable over the
+  // ESP32's HTTP endpoint.
+  let dbPromise = null;
+  function openDb() {
+    if (dbPromise) return dbPromise;
+    dbPromise = new Promise((resolve, reject) => {
+      if (!window.indexedDB) { reject(new Error("IndexedDB not available")); return; }
+      const req = indexedDB.open(IDB_NAME, IDB_VERSION);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(IDB_CAPTURES)) db.createObjectStore(IDB_CAPTURES, { keyPath: "name" });
+        if (!db.objectStoreNames.contains(IDB_CHUNKS))   db.createObjectStore(IDB_CHUNKS,   { keyPath: ["name", "seq"] });
+        if (!db.objectStoreNames.contains(IDB_SIDECAR))  db.createObjectStore(IDB_SIDECAR);
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    return dbPromise;
+  }
+  function pReq(req) {
+    return new Promise((resolve, reject) => {
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  function pTxn(txn) {
+    return new Promise((resolve, reject) => {
+      txn.oncomplete = () => resolve();
+      txn.onerror = () => reject(txn.error);
+      txn.onabort = () => reject(txn.error || new Error("txn aborted"));
+    });
+  }
+  // Range covering every chunk of a given capture. `[]` compares greater than
+  // any number in IDB key ordering, so `[name, []]` is a valid upper bound.
+  function chunkRangeFor(name) {
+    return IDBKeyRange.bound([name], [name, []]);
   }
 
   async function writeSidecar() {
     try {
-      const root = await opfsRoot();
-      const handle = await root.getFileHandle(SIDECAR_NAME, { create: true });
-      const w = await handle.createWritable({ keepExistingData: false });
-      const payload = JSON.stringify({
+      const db = await openDb();
+      const txn = db.transaction(IDB_SIDECAR, "readwrite");
+      txn.objectStore(IDB_SIDECAR).put({
         captureFile: captureFileName,
         startIso: captureStartIso,
         startWallMs: captureStartWallMs,
@@ -157,11 +206,10 @@
         lastPersistedTs: lastPersistedTs,
         frames: captureFrames,
         gaps: captureGaps,
-      });
-      await w.write(payload);
-      await w.close();
+      }, SIDECAR_KEY);
+      await pTxn(txn);
     } catch (e) {
-      // Sidecar failures aren't fatal — the file itself is still being
+      // Sidecar failures aren't fatal — the chunks themselves are still being
       // written. Resume-across-reload just won't work this session.
       console.warn("sidecar write failed", e);
     }
@@ -169,43 +217,64 @@
 
   async function clearSidecar() {
     try {
-      const root = await opfsRoot();
-      await root.removeEntry(SIDECAR_NAME).catch(() => {});
+      const db = await openDb();
+      const txn = db.transaction(IDB_SIDECAR, "readwrite");
+      txn.objectStore(IDB_SIDECAR).delete(SIDECAR_KEY);
+      await pTxn(txn);
     } catch (e) { /* ignore */ }
   }
 
   async function readSidecar() {
     try {
-      const root = await opfsRoot();
-      const handle = await root.getFileHandle(SIDECAR_NAME);
-      const file = await handle.getFile();
-      return JSON.parse(await file.text());
+      const db = await openDb();
+      const txn = db.transaction(IDB_SIDECAR, "readonly");
+      const v = await pReq(txn.objectStore(IDB_SIDECAR).get(SIDECAR_KEY));
+      return v || null;
     } catch (e) {
       return null;
     }
   }
 
-  // One open/write/close cycle per flush. FileSystemWritableFileStream only
-  // commits on close(), so long-lived writables don't actually persist —
-  // batching is the correct shape here.
+  // One IDB txn per flush covers the chunk write, the captures-record
+  // metadata update, and the sidecar snapshot. Atomic — a reload can never
+  // observe a chunk without its sidecar advance.
   async function flushBatch() {
-    if (!captureFile || pendingWrites.length === 0) return;
+    if (!captureFileName || pendingWrites.length === 0) return;
     const batch = pendingWrites.join("");
     pendingWrites = [];
-    const chunk = new TextEncoder().encode(batch);
+    const bytes = new TextEncoder().encode(batch);
+    const seq = nextSeq;
+    const newOffset = captureOffset + bytes.byteLength;
     try {
-      const w = await captureFile.createWritable({ keepExistingData: true });
-      await w.seek(captureOffset);
-      await w.write(chunk);
-      await w.close();
-      captureOffset += chunk.byteLength;
-      await writeSidecar();
+      const db = await openDb();
+      const txn = db.transaction([IDB_CHUNKS, IDB_CAPTURES, IDB_SIDECAR], "readwrite");
+      txn.objectStore(IDB_CHUNKS).put({ name: captureFileName, seq, bytes });
+      txn.objectStore(IDB_CAPTURES).put({
+        name: captureFileName,
+        iso: captureStartIso,
+        label: captureLabel,
+        startWallMs: captureStartWallMs,
+        size: newOffset,
+        frames: captureFrames,
+        gaps: captureGaps,
+      });
+      txn.objectStore(IDB_SIDECAR).put({
+        captureFile: captureFileName,
+        startIso: captureStartIso,
+        startWallMs: captureStartWallMs,
+        offset: newOffset,
+        lastPersistedTs: lastPersistedTs,
+        frames: captureFrames,
+        gaps: captureGaps,
+      }, SIDECAR_KEY);
+      await pTxn(txn);
+      captureOffset = newOffset;
+      nextSeq = seq + 1;
       renderCaptureBar();
     } catch (e) {
-      // Requeue the batch so the next flush retries. Don't dedupe — a
-      // half-succeeded write would already have advanced captureOffset.
+      // Requeue the batch so the next flush retries.
       pendingWrites.unshift(batch);
-      console.error("OPFS flush failed", e);
+      console.error("IDB flush failed", e);
     }
   }
 
@@ -263,10 +332,10 @@
 
   async function startCapture() {
     if (captureState !== "idle") return;
-    let root;
-    try { root = await opfsRoot(); }
+    let db;
+    try { db = await openDb(); }
     catch (e) {
-      alert("This browser doesn't support OPFS — capture unavailable.");
+      alert("This browser doesn't support IndexedDB — capture unavailable.");
       return;
     }
     // Filesystem-safe ISO variant for the filename (colons stripped, sub-second
@@ -281,22 +350,32 @@
     captureFrames = 0;
     captureGaps = 0;
     captureOffset = 0;
+    nextSeq = 0;
     lastPersistedTs = 0;
     pendingWrites = [];
     resumeBuffer = [];
     try {
-      captureFile = await root.getFileHandle(captureFileName, { create: true });
-      // Truncate any prior contents (shouldn't exist under this filename, but
-      // paranoid — an ISO-second collision would otherwise silently append).
-      const w = await captureFile.createWritable({ keepExistingData: false });
-      await w.close();
+      const txn = db.transaction([IDB_CAPTURES, IDB_CHUNKS], "readwrite");
+      // Defensive: an ISO-second collision would otherwise leave stale chunks
+      // pinned under this key. Shouldn't happen but is trivial to guard.
+      txn.objectStore(IDB_CHUNKS).delete(chunkRangeFor(captureFileName));
+      txn.objectStore(IDB_CAPTURES).put({
+        name: captureFileName,
+        iso: captureStartIso,
+        label: captureLabel,
+        startWallMs: captureStartWallMs,
+        size: 0,
+        frames: 0,
+        gaps: 0,
+      });
+      await pTxn(txn);
     } catch (e) {
-      alert("Failed to create capture file: " + e.message);
-      captureFile = null;
+      alert("Failed to create capture record: " + e.message);
       captureFileName = null;
       return;
     }
-    // Chrome / Android — makes OPFS survive storage pressure. iOS ignores.
+    // Chrome / Android — asks the browser to keep the DB across storage
+    // pressure. iOS ignores; A2HS is the durability lever there.
     if (navigator.storage && navigator.storage.persist) {
       try { await navigator.storage.persist(); } catch (e) { /* ignore */ }
     }
@@ -317,9 +396,8 @@
     if (captureState === "resuming") {
       await new Promise(r => setTimeout(r, 200));
     }
-    // Drain anything still in memory before flipping state — flushBatch is a
-    // no-op once captureState flips because it wraps createWritable in a
-    // captureFile guard.
+    // Drain anything still in memory before flipping state — after the flip,
+    // scheduleFlush stops arming new timers.
     await flushBatch();
     captureState = "idle";
     releaseWakeLock();
@@ -333,18 +411,38 @@
     return `capture-${iso}${lbl}-${frames}.log`;
   }
 
+  // Concatenate every chunk of a capture into a single Blob. Cursors in ISO
+  // key order → chunks land in insertion (seq) order. Materialised in memory
+  // — long rides depend on the browser handling multi-hundred-MB Blob
+  // assembly, which has been fine so far but is the trade vs OPFS getFile().
+  async function readCaptureBlob(name) {
+    const db = await openDb();
+    const txn = db.transaction(IDB_CHUNKS, "readonly");
+    const store = txn.objectStore(IDB_CHUNKS);
+    const parts = [];
+    return new Promise((resolve, reject) => {
+      const req = store.openCursor(chunkRangeFor(name));
+      req.onsuccess = () => {
+        const cur = req.result;
+        if (cur) { parts.push(cur.value.bytes); cur.continue(); }
+        else { resolve(new Blob(parts, { type: "text/plain" })); }
+      };
+      req.onerror = () => reject(req.error);
+    });
+  }
+
   async function exportCapture() {
     if (captureState !== "idle") {
       await stopCapture();
     }
-    if (!captureFile) return;
-    let file;
-    try { file = await captureFile.getFile(); }
+    if (!captureFileName) return;
+    let blob;
+    try { blob = await readCaptureBlob(captureFileName); }
     catch (e) {
-      alert("Failed to open capture file for export: " + e.message);
+      alert("Failed to read capture for export: " + e.message);
       return;
     }
-    const url = URL.createObjectURL(file);
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = downloadNameFor(captureStartIso, captureLabel, captureFrames);
@@ -378,7 +476,7 @@
         // Normalize CR-only line endings to CRLF. The firmware ring stores
         // each frame as `(sec.us) t...\r`; the /capture handler streams
         // them concatenated so a raw body has `\r` between lines. Live WS
-        // frames become `\r\n` on OPFS write (see onCaptureLine). Downstream
+        // frames become `\r\n` when written (see onCaptureLine). Downstream
         // `scripts/capture.py --stdin` uses `sys.stdin.buffer.readline()`
         // in binary mode which only splits on `\n` — a mixed file would
         // read as one giant line and drop most frames. Normalize here so
@@ -427,8 +525,8 @@
   }
 
   // Detect iOS Safari not-in-standalone. Only affects the A2HS hint's
-  // visibility — capture itself works either way, iOS just evicts OPFS
-  // after 7 days if the page isn't installed.
+  // visibility — capture itself works either way, iOS just evicts site
+  // storage aggressively if the page isn't installed.
   function maybeShowA2HS() {
     const ua = navigator.userAgent;
     const isIOS = /iPad|iPhone|iPod/.test(ua) || (ua.includes("Mac") && "ontouchend" in document);
@@ -441,28 +539,26 @@
   }
 
   // -------------------------------------------------------------------------
-  // Captures drawer — browse / re-export / delete files in OPFS.
+  // Captures drawer — browse / re-export / delete captures.
   //
   // Trigger: the "Files (N)" button in the capture bar (visible when N > 0).
   // Fixes the orphaned-files problem the rider view had — captures piled up
-  // in OPFS with no UI, and Export only pointed at the most recent. The
+  // in storage with no UI, and Export only pointed at the most recent. The
   // drawer surfaces the full list with per-row Export + inline-confirm Delete.
   // -------------------------------------------------------------------------
 
   async function listCaptureFiles() {
-    const root = await opfsRoot();
-    const items = [];
-    // AsyncIterator over root's entries. Chrome / Android / iOS 17.4+ all
-    // support this.
-    // @ts-ignore (values is on FileSystemDirectoryHandle)
-    for await (const [name, handle] of root.entries()) {
-      if (handle.kind !== "file") continue;
-      if (!name.startsWith("capture-") || !name.endsWith(".log")) continue;
-      let size = 0;
-      try { size = (await handle.getFile()).size; } catch { /* ignore */ }
-      const parsed = parseCaptureName(name) || { iso: name, label: "" };
-      items.push({ name, size, iso: parsed.iso, label: parsed.label });
-    }
+    const db = await openDb();
+    const txn = db.transaction(IDB_CAPTURES, "readonly");
+    const all = await pReq(txn.objectStore(IDB_CAPTURES).getAll());
+    const items = all
+      .filter(it => it && it.name && it.name.startsWith("capture-") && it.name.endsWith(".log"))
+      .map(it => ({
+        name: it.name,
+        size: it.size || 0,
+        iso: it.iso || (parseCaptureName(it.name) || {}).iso || it.name,
+        label: it.label || "",
+      }));
     // Newest first — captureFileName sorts by ISO string lexicographically.
     items.sort((a, b) => (b.iso > a.iso ? 1 : b.iso < a.iso ? -1 : 0));
     return items;
@@ -478,20 +574,13 @@
 
   async function exportCaptureFile(name, iso, label) {
     try {
-      const root = await opfsRoot();
-      const handle = await root.getFileHandle(name);
-      const file = await handle.getFile();
-      // Frame count isn't tracked per historical file; count via a cheap
-      // pass over the text. For a fresh capture we already know frames
-      // and pass it via the current-capture Export button.
-      // Best-effort: sample the file to estimate, but we don't need it in
-      // the filename for the drawer path — use size and let the user rename.
-      const url = URL.createObjectURL(file);
+      const blob = await readCaptureBlob(name);
+      const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = downloadNameFor(iso, label, "");
-      // Strip a trailing `-` that downloadNameFor leaves when frames === "".
-      a.download = a.download.replace(/-\.log$/, ".log");
+      a.download = downloadNameFor(iso, label, "")
+        // Strip a trailing `-` that downloadNameFor leaves when frames === "".
+        .replace(/-\.log$/, ".log");
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -503,13 +592,14 @@
 
   async function deleteCaptureFile(name) {
     try {
-      const root = await opfsRoot();
-      await root.removeEntry(name);
-      // If we just deleted the file the sidecar / Export button points at,
-      // clear that state too so the user doesn't tap Export into a stale
-      // handle.
+      const db = await openDb();
+      const txn = db.transaction([IDB_CAPTURES, IDB_CHUNKS], "readwrite");
+      txn.objectStore(IDB_CAPTURES).delete(name);
+      txn.objectStore(IDB_CHUNKS).delete(chunkRangeFor(name));
+      await pTxn(txn);
+      // If we just deleted the capture the sidecar / Export button points at,
+      // clear that state too so the user doesn't tap Export into thin air.
       if (captureFileName === name && captureState === "idle") {
-        captureFile = null;
         captureFileName = null;
         captureStartIso = null;
         captureLabel = "";
@@ -645,9 +735,14 @@
     const s = await readSidecar();
     if (!s || !s.captureFile) return;
     try {
-      const root = await opfsRoot();
-      const handle = await root.getFileHandle(s.captureFile);
-      captureFile = handle;
+      const db = await openDb();
+      // Fire both reads on their own txns so we don't depend on a single txn
+      // staying alive across an await boundary.
+      const [meta, chunkCount] = await Promise.all([
+        pReq(db.transaction(IDB_CAPTURES, "readonly").objectStore(IDB_CAPTURES).get(s.captureFile)),
+        pReq(db.transaction(IDB_CHUNKS, "readonly").objectStore(IDB_CHUNKS).count(chunkRangeFor(s.captureFile))),
+      ]);
+      if (!meta) throw new Error("captures record missing");
       captureFileName = s.captureFile;
       captureStartIso = s.startIso;
       captureStartWallMs = s.startWallMs || Date.now();
@@ -655,24 +750,24 @@
       captureFrames = s.frames || 0;
       captureGaps = s.gaps || 0;
       lastPersistedTs = s.lastPersistedTs || 0;
+      nextSeq = chunkCount;
       // Label is embedded in the filename — recover it so Export gets the
       // right download name after a page reload.
       const parsed = parseCaptureName(s.captureFile);
       captureLabel = parsed ? parsed.label : "";
       // Enter recording so the first ws.onopen (which fires momentarily)
       // triggers a backfill — reload during a disconnect picks up cleanly.
-      // Also mark hasEverConnected so that first onopen is treated as a
-      // reconnect and fires performBackfill. hasEverConnected is defined
-      // below in the WebSocket section; assign via globalThis to avoid a
-      // TDZ hazard if this async block resolves before the WS block runs.
+      // hasEverConnected is defined below in the WebSocket section;
+      // resumingFromSidecar (assigned via a `let` further down) forces the
+      // first onopen to be treated as a reconnect and fire performBackfill.
       captureState = "recording";
       resumingFromSidecar = true;
       await requestWakeLock();
       scheduleFlush();
       renderCaptureBar();
     } catch (e) {
-      // Sidecar pointed at a file that's gone — clear stale state and let
-      // the user start a new capture normally.
+      // Sidecar pointed at a capture whose record is gone — clear stale
+      // state and let the user start a new capture normally.
       await clearSidecar();
     }
   })();

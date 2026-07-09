@@ -38,7 +38,7 @@ Ordered so each step is independently verifiable. USB-powered at the desk is fin
 
 ### 2 — WiFi AP + `/health` + OTA update endpoint
 
-- [x] AP mode, SSID `bike-dash-<lower6 of MAC>`, WPA2 password from `main/wifi_secrets.h` (with `.example` in-tree, real file `.gitignore`'d).
+- [x] AP mode, SSID `glassdeck-<lower6 of MAC>`, WPA2 password from `main/wifi_secrets.h` (with `.example` in-tree, real file `.gitignore`'d).
 - [x] Boot prints the SSID + password + IP to USB-CDC.
 - [x] HTTP server up at `192.168.4.1`, `GET /health` returning JSON with uptime, TWAI health (state + bus_err + rx_missed + rx_overrun), frames-seen counter, connected-client count + RSSI.
 - [x] **Added mid-milestone:** OTA-capable partition table (`partitions.csv`, 2× 3 MB app slots on 8 MB flash). Default 1 MB `factory` partition was already 79% full after the WiFi stack pulled in; this gives ~10× headroom and lets subsequent milestones flash over WiFi.

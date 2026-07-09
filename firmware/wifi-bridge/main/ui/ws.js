@@ -31,7 +31,7 @@
       // Trigger backfill in three cases:
       //   1) real reconnect while recording — normal M4 splice
       //   2) first connect after page reload during a live capture (resumed
-      //      from OPFS sidecar; catches whatever the ring covers of the
+      //      from the IDB sidecar; catches whatever the ring covers of the
       //      offline window)
       // Fire-and-forget — performBackfill flips captureState internally,
       // buffers live frames while it runs, and clears itself on error.
@@ -50,7 +50,7 @@
       bumpLiveness();
 
       // Strip (sec.us) prefix for the decoded panel; capture pipeline keeps
-      // the full raw line so the OPFS file is byte-identical to what
+      // the full raw line so the captured bytes are byte-identical to what
       // GET /capture would return.
       let payload = raw;
       let ts = null;

@@ -3,7 +3,7 @@
 // live-view.md and firmware/wifi-bridge/README.md for the full plan.
 //
 // State at milestone 5:
-//   - WiFi soft-AP (SSID `bike-dash-<lower6 of MAC>`, WPA2 from wifi_secrets.h)
+//   - WiFi soft-AP (SSID `glassdeck-<lower6 of MAC>`, WPA2 from wifi_secrets.h)
 //   - GET  /         gzipped live-view HTML (bus-health header + raw ticker)
 //   - GET  /health   JSON with uptime, TWAI health, frame counters, WS state
 //   - POST /ota      raw firmware.bin → rollback-protected OTA update
@@ -72,7 +72,7 @@
 #define AP_CHANNEL     1
 #define AP_MAX_CONN    4
 
-// SSID built at boot from the wifi-softap MAC. "bike-dash-" (10) + 6 hex + NUL.
+// SSID built at boot from the wifi-softap MAC. "glassdeck-" (10) + 6 hex + NUL.
 static char ap_ssid[32];
 
 // Serializes writes to stdout so SLCAN frame lines, status comments, and
@@ -211,7 +211,7 @@ static void write_locked(const char *buf, size_t n) {
 static void derive_ap_ssid(void) {
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
-    snprintf(ap_ssid, sizeof(ap_ssid), "bike-dash-%02x%02x%02x",
+    snprintf(ap_ssid, sizeof(ap_ssid), "glassdeck-%02x%02x%02x",
              mac[3], mac[4], mac[5]);
 }
 

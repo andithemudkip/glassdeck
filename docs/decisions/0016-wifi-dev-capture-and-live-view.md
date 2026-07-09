@@ -48,7 +48,7 @@ The existing `firmware/can-logger/` target is retained for USB-CDC desk dev. Two
 ### WiFi topology
 
 - **Mode:** AP (ESP is the access point).
-- **SSID:** `bike-dash-<lower6 of MAC>` (e.g. `bike-dash-a1b2c3`). Stable per device, no compile-time config needed for SSID.
+- **SSID:** `glassdeck-<lower6 of MAC>` (e.g. `glassdeck-a1b2c3`). Stable per device, no compile-time config needed for SSID.
 - **Password:** WPA2, compiled in. Stored in a header that lives outside source control (`firmware/wifi-bridge/main/wifi_secrets.h`, `.gitignore`'d, with `.example` checked in). Default password rotates with the firmware build — print it on the serial console at boot for the operator to copy.
 - **IP:** ESP serves at `192.168.4.1` (ESP-IDF AP default). Live view at `http://192.168.4.1/`. No DNS, no mDNS dependency — the IP is stable and printed on boot.
 

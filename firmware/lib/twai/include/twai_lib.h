@@ -1,4 +1,4 @@
-// twai_lib — shared TWAI (CAN) driver wrapper for bike-dash firmware targets.
+// twai_lib — shared TWAI (CAN) driver wrapper for glassdeck firmware targets.
 //
 // Owns the ESP-IDF TWAI peripheral in listen-only mode. Consumers run their own
 // read task on top of twai_lib_receive() and their own sinks (SLCAN → USB-CDC

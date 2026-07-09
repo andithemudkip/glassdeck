@@ -274,8 +274,8 @@
   }
 
   /* Captures drawer — bottom sheet on mobile, centered card on wide screens.
-     Lists everything in OPFS that looks like a capture, with per-row Export
-     and inline-confirm Delete. Backdrop closes on tap. */
+     Lists every capture record in IDB, with per-row Export and inline-confirm
+     Delete. Backdrop closes on tap. */
   #drawerBackdrop {
     position: fixed; inset: 0;
     background: rgba(0, 0, 0, 0.5);

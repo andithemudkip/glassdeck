@@ -1,4 +1,4 @@
-# bike-dash
+# Glassdeck
 
 Open-source dashboard replacement for a 2020 Husqvarna Svartpilen 401 (KTM 390 platform). Long-term reverse-engineering + hardware project.
 
