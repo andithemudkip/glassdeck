@@ -1,6 +1,7 @@
 set(INDEX_HTML     "${CMAKE_CURRENT_LIST_DIR}/index.html")
 set(INDEX_MERGED   "${CMAKE_CURRENT_BINARY_DIR}/index.merged.html")
 set(INDEX_HTML_GZ  "${CMAKE_CURRENT_BINARY_DIR}/index.html.gz")
+set(INDEX_DEPS     "${CMAKE_CURRENT_BINARY_DIR}/index.deps")
 
 # Repo root is four dirs up: main/ → wifi-bridge/ → firmware/ → repo-root.
 get_filename_component(REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
@@ -52,17 +53,30 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     # the offending entry index, the Python script exits non-zero, and CMake
     # FATAL_ERRORs the build with the child's stderr attached — that's the
     # M6 "signals.yaml parses cleanly at build time" CI check.
+    #
+    # --deps-file catches every `/* __INCLUDE: */` partial resolved during
+    # codegen. We append that list to CMAKE_CONFIGURE_DEPENDS below so editing
+    # a partial (styles.css, state.js, …) reconfigures and regenerates.
     execute_process(
         COMMAND python3 ${GEN_SCRIPT}
-            --template ${INDEX_HTML}
-            --schema   ${SIGNALS_YAML}
-            --out      ${INDEX_MERGED}
+            --template  ${INDEX_HTML}
+            --schema    ${SIGNALS_YAML}
+            --out       ${INDEX_MERGED}
+            --deps-file ${INDEX_DEPS}
         RESULT_VARIABLE _gen_rc
         ERROR_VARIABLE  _gen_err
     )
     if(NOT _gen_rc EQUAL 0)
         message(FATAL_ERROR
             "signals.yaml → index.html codegen failed (rc=${_gen_rc}):\n${_gen_err}")
+    endif()
+
+    if(EXISTS "${INDEX_DEPS}")
+        file(STRINGS "${INDEX_DEPS}" _index_partials)
+        if(_index_partials)
+            set_property(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_index_partials})
+        endif()
     endif()
 
     execute_process(

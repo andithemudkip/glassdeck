@@ -1,0 +1,428 @@
+  :root {
+    --bg: #0b0d10;
+    --fg: #ede7de;
+    --dim: #6b7480;
+    --ok: #7cd992;
+    --warn: #e6b06a;
+    --err: #e07070;
+    --accent: #f1b500;
+    --hair: #1a1e24;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    height: 100%; width: 100%;
+    background: var(--bg); color: var(--fg);
+    font-family: var(--mono);
+    font-size: 13px; line-height: 1.35;
+    font-variant-numeric: tabular-nums;
+    -webkit-text-size-adjust: 100%;
+    overscroll-behavior: none;
+  }
+  body {
+    display: flex; flex-direction: column;
+    height: 100dvh;
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+    overflow-x: hidden;
+  }
+
+  header {
+    flex: 0 0 auto;
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 1px;
+    background: var(--hair);
+    border-bottom: 1px solid var(--hair);
+    padding-top: env(safe-area-inset-top);
+  }
+  header .cell {
+    background: var(--bg);
+    padding: 6px 8px;
+    display: flex; flex-direction: column;
+    min-width: 0;
+  }
+  header .k { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; }
+  header .v { color: var(--fg); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  header .v.warn { color: var(--warn); }
+  header .v.err  { color: var(--err); }
+  header .v.ok   { color: var(--ok); }
+  header .v.mute { color: var(--dim); }
+
+  main#mid {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    grid-auto-rows: minmax(72px, auto);
+    align-content: start;
+    gap: 1px;
+    background: var(--hair);
+    padding: 1px;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+  .sig {
+    background: var(--bg);
+    padding: 10px 12px 12px 12px;
+    position: relative;
+    display: flex; flex-direction: column;
+    min-width: 0;
+  }
+  .sig .meta {
+    color: var(--dim);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    display: flex; justify-content: space-between;
+    gap: 8px;
+  }
+  .sig .meta .name { color: var(--dim); }
+  .sig .meta .loc  { color: var(--dim); opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sig .row {
+    display: flex; align-items: baseline;
+    gap: 6px;
+    margin-top: 6px;
+    min-width: 0;
+    overflow: clip;
+  }
+  .sig .val {
+    color: var(--fg);
+    font-size: clamp(22px, 4.4vw, 30px);
+    font-weight: 500;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+    flex: 0 1 auto;
+    min-width: 0;
+    transition: color 150ms linear, opacity 300ms linear;
+  }
+  .sig .val.pulse { color: var(--accent); transition: color 0s; }
+  .sig .val.stale { opacity: 0.4; }
+  .sig .val.enum-ok   { color: var(--ok); }
+  .sig .val.enum-err  { color: var(--err); }
+  .sig .unit {
+    color: var(--dim); font-size: 11px;
+    letter-spacing: 0.03em;
+  }
+  /* Peak lives out-of-flow in the bottom-right corner (just above the
+     1-px freshness bar) so it never fights the value for row width. */
+  .sig .peak {
+    position: absolute;
+    bottom: 4px;
+    right: 10px;
+    color: var(--dim);
+    font-size: 10px;
+    opacity: 0.7;
+    white-space: nowrap;
+    letter-spacing: 0.03em;
+    pointer-events: none;
+  }
+  .sig .fresh {
+    position: absolute;
+    left: 0; bottom: 0;
+    height: 1px;
+    background: var(--accent);
+    width: 0%;
+    transition: width 60ms linear;
+  }
+  /* Bootstrap state before first frame: value is a single em-dash. */
+  .sig.empty .val { color: var(--dim); }
+
+  /* Hero — RPM span 2 columns when there's room, so the tach number reads big. */
+  .sig.hero { grid-column: span 1; }
+  @media (min-width: 720px) {
+    .sig.hero { grid-column: span 2; }
+    .sig.hero .val { font-size: clamp(28px, 5vw, 40px); }
+  }
+
+  /* Bus liveness — a 1-px amber line at the bottom edge of the header
+     that pulses to full brightness on frame arrival and decays to zero
+     when the bus goes quiet. Same visual language as the per-cell
+     freshness bars; scaled to the whole surface. Ambient, non-noisy;
+     replaces the raw-frame ticker as the "yes, frames are arriving"
+     signal. Dev/debug view will get the raw ticker on its own route. */
+  #liveness {
+    position: absolute;
+    left: 0; right: 0;
+    bottom: 0;
+    height: 1px;
+    background: var(--accent);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 240ms linear;
+  }
+  header { position: relative; }
+
+  .pip { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--dim); vertical-align: middle; margin-right: 6px; }
+  .pip.ok  { background: var(--ok); }
+  .pip.warn{ background: var(--warn); }
+  .pip.err { background: var(--err); }
+
+  /* Capture control bar (M4): sits between the status header and the decoded
+     panel. When idle it's a single Start button + optional Export chip; when
+     recording it swaps to a live status readout (elapsed, frames, gaps) and
+     a Stop button. Kept slim so on portrait phones it doesn't eat a decoded
+     row's worth of viewport. */
+  #captureBar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--hair);
+    min-height: 32px;
+    font-size: 12px;
+    color: var(--dim);
+  }
+  #captureBar button {
+    background: var(--bg);
+    color: var(--fg);
+    border: 1px solid var(--dim);
+    border-radius: 3px;
+    padding: 4px 12px;
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  #captureBar button:hover { border-color: var(--fg); }
+  #captureBar button:disabled { opacity: 0.4; cursor: default; }
+  #captureBar button.primary { border-color: var(--accent); color: var(--accent); }
+  #captureBar button.rec {
+    border-color: var(--err); color: var(--err);
+  }
+  #captureBar button.ghost {
+    border-color: var(--hair);
+    color: var(--dim);
+  }
+  #captureBar button.ghost:hover { border-color: var(--dim); color: var(--fg); }
+  #captureBar input.label-in {
+    background: var(--bg);
+    color: var(--fg);
+    border: 1px solid var(--hair);
+    border-radius: 3px;
+    padding: 4px 8px;
+    font-family: inherit;
+    font-size: 12px;
+    width: 140px;
+    outline: none;
+  }
+  #captureBar input.label-in:focus { border-color: var(--accent); }
+  #captureBar input.label-in::placeholder { color: var(--dim); opacity: 0.7; }
+  /* Recording indicator: a soft-pulsing amber dot next to the elapsed time. */
+  #captureBar .rec-dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: rec-pulse 1.6s ease-in-out infinite;
+    margin-right: 4px;
+  }
+  @keyframes rec-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.35; }
+  }
+  #captureBar .stat {
+    color: var(--fg);
+    font-variant-numeric: tabular-nums;
+  }
+  #captureBar .stat .k {
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 10px;
+    margin-right: 4px;
+  }
+  #captureBar .warn { color: var(--warn); }
+  #captureBar .spacer { flex: 1 1 auto; }
+
+  /* Install-to-Home-Screen hint for iOS Safari. Kept as a slim non-modal
+     line above the decoded panel so it doesn't block the surface but is
+     visible enough that a first-time capturer sees it before hitting Start.
+     Dismissed → localStorage flag → stays hidden across reloads. */
+  #a2hsHint {
+    display: none;
+    padding: 6px 10px;
+    background: rgba(241, 181, 0, 0.08);
+    border-bottom: 1px solid rgba(241, 181, 0, 0.25);
+    color: var(--accent);
+    font-size: 11px;
+  }
+  #a2hsHint.show { display: flex; align-items: center; gap: 8px; }
+  #a2hsHint .spacer { flex: 1 1 auto; }
+  #a2hsHint button {
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid rgba(241, 181, 0, 0.4);
+    border-radius: 3px;
+    padding: 2px 8px;
+    font-family: inherit;
+    font-size: 10px;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  @media (max-width: 420px) {
+    #captureBar { flex-wrap: wrap; gap: 6px; }
+    #captureBar .stat .k { display: none; }
+    #captureBar input.label-in { width: 100%; }
+  }
+
+  /* Captures drawer — bottom sheet on mobile, centered card on wide screens.
+     Lists everything in OPFS that looks like a capture, with per-row Export
+     and inline-confirm Delete. Backdrop closes on tap. */
+  #drawerBackdrop {
+    position: fixed; inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 10;
+    display: none;
+  }
+  #drawerBackdrop.show { display: block; }
+  #drawer {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    max-height: 75vh;
+    background: var(--bg);
+    border-top: 1px solid var(--hair);
+    z-index: 11;
+    display: none;
+    flex-direction: column;
+    box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.4);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  #drawer.show { display: flex; }
+  #drawer .head {
+    display: flex;
+    align-items: center;
+    padding: 12px 14px 10px 14px;
+    border-bottom: 1px solid var(--hair);
+    gap: 12px;
+  }
+  #drawer .head .title {
+    color: var(--fg);
+    font-size: 13px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  #drawer .head .count { color: var(--dim); font-size: 11px; }
+  #drawer .head .spacer { flex: 1 1 auto; }
+  #drawer .head button {
+    background: var(--bg);
+    color: var(--dim);
+    border: 1px solid var(--hair);
+    border-radius: 3px;
+    padding: 4px 10px;
+    font-family: inherit;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+  }
+  #drawer .head button:hover { color: var(--fg); border-color: var(--dim); }
+  #drawer .list {
+    overflow-y: auto;
+    padding: 4px 0;
+  }
+  #drawer .row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--hair);
+    min-height: 44px;
+  }
+  #drawer .row:last-child { border-bottom: none; }
+  #drawer .row.active {
+    /* Currently-recording file — grey it out slightly and disable delete. */
+    opacity: 0.75;
+  }
+  #drawer .row .info { flex: 1 1 auto; min-width: 0; }
+  #drawer .row .name {
+    color: var(--fg);
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #drawer .row .name .lbl { color: var(--accent); }
+  #drawer .row .meta {
+    color: var(--dim);
+    font-size: 10px;
+    margin-top: 2px;
+    letter-spacing: 0.04em;
+  }
+  #drawer .row .meta .rec-tag {
+    color: var(--err);
+    text-transform: uppercase;
+    margin-left: 8px;
+  }
+  #drawer .row .actions {
+    display: flex;
+    gap: 6px;
+    flex: 0 0 auto;
+  }
+  #drawer .row button {
+    background: var(--bg);
+    border: 1px solid var(--hair);
+    color: var(--fg);
+    border-radius: 3px;
+    padding: 4px 10px;
+    font-family: inherit;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+  }
+  #drawer .row button.export { color: var(--accent); border-color: rgba(241, 181, 0, 0.4); }
+  #drawer .row button.export:hover { border-color: var(--accent); }
+  #drawer .row button.del { color: var(--err); border-color: rgba(224, 112, 112, 0.3); }
+  #drawer .row button.del:hover { border-color: var(--err); }
+  #drawer .row button.del.confirm { background: var(--err); color: var(--bg); border-color: var(--err); }
+  #drawer .row button:disabled { opacity: 0.3; cursor: default; }
+  #drawer .empty {
+    color: var(--dim);
+    font-size: 12px;
+    padding: 24px 14px;
+    text-align: center;
+  }
+  @media (min-width: 720px) {
+    #drawer {
+      left: 50%; right: auto; bottom: 24px;
+      transform: translateX(-50%);
+      width: min(560px, 90vw);
+      max-height: 70vh;
+      border: 1px solid var(--hair);
+      border-radius: 4px;
+    }
+  }
+
+  /* Portrait phones: 2 columns, RPM full-width. */
+  @media (max-width: 720px) {
+    main#mid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .sig.hero { grid-column: 1 / -1; }
+    .sig.hero .val { font-size: clamp(32px, 9vw, 48px); }
+  }
+  /* Small phones: single column. */
+  @media (max-width: 420px) {
+    header { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    main#mid { grid-template-columns: 1fr; }
+    .sig .val { font-size: clamp(24px, 8vw, 30px); }
+  }
+  /* Landscape phones — squat: give the panel more columns. */
+  @media (orientation: landscape) and (max-height: 500px) {
+    header { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+    main#mid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .sig.hero { grid-column: span 1; }
+    .sig.hero .val { font-size: clamp(24px, 3.5vh, 32px); }
+    .sig .val { font-size: clamp(18px, 3vh, 24px); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sig .val, .sig .fresh { transition: none; }
+    .sig .val.pulse { color: var(--fg); }
+  }

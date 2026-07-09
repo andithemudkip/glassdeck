@@ -7,6 +7,15 @@ and emits a JS block that replaces the `/* __SIGNALS_JS__ */` placeholder
 in firmware/wifi-bridge/main/index.html. Writes the merged HTML to
 --out, which the CMake build then gzips + embeds.
 
+Also expands `/* __INCLUDE: <relative-path> */` markers in the template
+(and recursively in included partials) by inlining the referenced file's
+contents. Paths resolve relative to the file containing the marker. One
+trailing newline is stripped from each included file so a partial ending
+with a POSIX-conventional final `\\n` doesn't turn the marker line into a
+double newline. With --deps-file, writes one absolute path per resolved
+include, sorted — CMake feeds that list into CMAKE_CONFIGURE_DEPENDS so
+a partial edit forces regeneration.
+
 A malformed schema raises SchemaError → non-zero exit → CMake build
 fails with the offending entry named. That is the M6 "CI check that
 signals.yaml parses cleanly" requirement.
@@ -16,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -27,6 +37,36 @@ sys.path.insert(0, str(HERE))
 from signals import Signal, load_signals  # noqa: E402
 
 PLACEHOLDER = "/* __SIGNALS_JS__ */"
+INCLUDE_RE = re.compile(r"/\* __INCLUDE:\s*([^*]+?)\s*\*/")
+
+
+class IncludeError(Exception):
+    pass
+
+
+def expand_includes(text: str, base_dir: Path, deps: set[Path],
+                    stack: tuple[Path, ...] = ()) -> str:
+    """Recursively expand /* __INCLUDE: <path> */ markers.
+
+    Cycles raise IncludeError with the offending chain. Missing files
+    raise IncludeError with the resolved absolute path. Every included
+    file's absolute path is added to `deps`.
+    """
+    def replace(match: re.Match) -> str:
+        rel = match.group(1)
+        target = (base_dir / rel).resolve()
+        if target in stack:
+            chain = " -> ".join(str(p) for p in stack + (target,))
+            raise IncludeError(f"include cycle: {chain}")
+        if not target.is_file():
+            raise IncludeError(f"missing include: {target} (from {base_dir})")
+        deps.add(target)
+        body = target.read_text()
+        if body.endswith("\n"):
+            body = body[:-1]
+        return expand_includes(body, target.parent, deps, stack + (target,))
+
+    return INCLUDE_RE.sub(replace, text)
 
 
 def signal_to_dict(s: Signal) -> dict:
@@ -75,21 +115,37 @@ def main() -> int:
                     help="docs/signals/signals.yaml")
     ap.add_argument("--out", type=Path, required=True,
                     help="destination for the merged HTML")
+    ap.add_argument("--deps-file", type=Path, default=None,
+                    help="write resolved include paths here for CMake")
     args = ap.parse_args()
 
     # load_signals raises SchemaError with the offending entry index on
     # a bad schema; we let it propagate to stderr and exit non-zero.
     signals = load_signals(args.schema)
 
-    template = args.template.read_text()
-    if PLACEHOLDER not in template:
+    template_path = args.template.resolve()
+    template = template_path.read_text()
+
+    deps: set[Path] = set()
+    try:
+        expanded = expand_includes(template, template_path.parent, deps)
+    except IncludeError as e:
+        print(f"gen_wifi_bridge_index: {e}", file=sys.stderr)
+        return 3
+
+    if PLACEHOLDER not in expanded:
         print(f"gen_wifi_bridge_index: placeholder {PLACEHOLDER!r} not "
               f"found in {args.template}", file=sys.stderr)
         return 2
 
-    merged = template.replace(PLACEHOLDER, render_js(signals))
+    merged = expanded.replace(PLACEHOLDER, render_js(signals))
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(merged)
+
+    if args.deps_file is not None:
+        args.deps_file.parent.mkdir(parents=True, exist_ok=True)
+        lines = [str(p) for p in sorted(deps)]
+        args.deps_file.write_text("\n".join(lines) + ("\n" if lines else ""))
     return 0
 
 
