@@ -682,15 +682,44 @@ static esp_err_t stream_ws_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// Phantom-fd reap: track per-fd send success/failure. When a WS peer's TCP
+// socket stops draining — iOS Chrome swiped away is the canonical case, since
+// the OS kernel keeps ACKing keepalives even after the app is gone — every
+// httpd_ws_send_frame_async returns ESP_ERR (queue full behind a stalled
+// control-thread send). We reap by force-closing (httpd_sess_trigger_close),
+// which stops the WiFi task from drowning core 0 in retransmits.
+//
+// Trigger is time-based, not count-based. Sends fail in *bursts* — the httpd
+// async work queue fills and drains at ~400 fps, so a healthy client can hit
+// 100+ consecutive failures during a bad moment without anything actually
+// being wrong. What separates a phantom from a healthy client isn't "how many
+// failures in a row" but "how long has it been since anything got through."
+// Only reap if the fd has attempted enough sends to have earned an opinion
+// (fails ≥ FAIL_FLOOR) AND hasn't had a success in NO_SUCCESS_MS.
+//
+// -1 sentinel because fd=0 can be a valid LWIP socket. `last_ok_tick` is
+// seeded at fd-tracking time so a freshly-added fd gets a grace period.
+#define WS_TX_FAIL_TRACKED       8      // ≥ max_open_sockets
+#define WS_TX_FAIL_FLOOR         30     // ~75 ms of failures at 400 fps
+#define WS_TX_NO_SUCCESS_MS      3000   // 3 s dry spell → phantom
+static struct {
+    int         fd;
+    uint16_t    fails;
+    TickType_t  last_ok_tick;
+} s_ws_tx_fails[WS_TX_FAIL_TRACKED];
+
 // Drains ws_tx_q and fans each frame out to every active WS client tracked by
-// the framework. Runs at priority +3 so it sits above status_task (+1) / the
-// main-task RX loop (+0) and below the httpd task (+5) — drains quickly, never
-// starves the HTTP server. httpd_ws_send_frame_async is blocking on the socket
-// send (bounded by cfg.send_wait_timeout, which we set to 1 s in
-// http_server_start), so a stuck client can stall the sender for at most 1 s
-// per stuck send call.
+// the framework. Runs at priority +3 so it sits above status_task (+1) and
+// below the httpd task (+5) — drains quickly, never starves the HTTP server.
+// httpd_ws_send_frame_async is blocking on the socket send (bounded by
+// cfg.send_wait_timeout, which we set to 1 s in http_server_start), so a
+// stuck client can stall the sender for at most 1 s per stuck send call.
+// Consecutive-failure tracking + trigger_close reaps half-open fds that
+// keepalive can't catch (see s_ws_tx_fails above).
 static void ws_tx_task(void *arg) {
     (void)arg;
+    for (int j = 0; j < WS_TX_FAIL_TRACKED; j++) s_ws_tx_fails[j].fd = -1;
+
     ws_item_t item;
     int fds[10];
     size_t nfds;
@@ -708,12 +737,50 @@ static void ws_tx_task(void *arg) {
         bool any_sent = false;
         for (size_t i = 0; i < nfds; i++) {
             if (httpd_ws_get_fd_info(s_server, fds[i]) != HTTPD_WS_CLIENT_WEBSOCKET) continue;
-            if (httpd_ws_send_frame_async(s_server, fds[i], &f) == ESP_OK) {
-                any_sent = true;
+            bool ok = (httpd_ws_send_frame_async(s_server, fds[i], &f) == ESP_OK);
+            if (ok) any_sent = true;
+
+            TickType_t now = xTaskGetTickCount();
+            int slot = -1, free_slot = -1;
+            for (int j = 0; j < WS_TX_FAIL_TRACKED; j++) {
+                if (s_ws_tx_fails[j].fd == fds[i]) { slot = j; break; }
+                if (s_ws_tx_fails[j].fd == -1 && free_slot < 0) free_slot = j;
+            }
+            if (slot < 0 && free_slot >= 0) {
+                slot = free_slot;
+                s_ws_tx_fails[slot].fd           = fds[i];
+                s_ws_tx_fails[slot].fails        = 0;
+                s_ws_tx_fails[slot].last_ok_tick = now;  // grace period
+            }
+            if (slot < 0) continue;
+
+            if (ok) {
+                s_ws_tx_fails[slot].fails        = 0;
+                s_ws_tx_fails[slot].last_ok_tick = now;
+            } else if (++s_ws_tx_fails[slot].fails >= WS_TX_FAIL_FLOOR &&
+                       (now - s_ws_tx_fails[slot].last_ok_tick) >=
+                           pdMS_TO_TICKS(WS_TX_NO_SUCCESS_MS)) {
+                httpd_sess_trigger_close(s_server, fds[i]);
+                s_ws_tx_fails[slot].fd    = -1;
+                s_ws_tx_fails[slot].fails = 0;
             }
         }
         if (any_sent) {
             atomic_fetch_add_explicit(&frames_ws_sent, 1, memory_order_relaxed);
+        }
+
+        // Sweep: forget any tracked fd that wasn't in this iteration's client
+        // list (framework already reaped it, or trigger_close above did).
+        for (int j = 0; j < WS_TX_FAIL_TRACKED; j++) {
+            if (s_ws_tx_fails[j].fd == -1) continue;
+            bool present = false;
+            for (size_t i = 0; i < nfds; i++) {
+                if (fds[i] == s_ws_tx_fails[j].fd) { present = true; break; }
+            }
+            if (!present) {
+                s_ws_tx_fails[j].fd    = -1;
+                s_ws_tx_fails[j].fails = 0;
+            }
         }
     }
 }
@@ -721,13 +788,21 @@ static void ws_tx_task(void *arg) {
 static void http_server_start(void) {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     // Headroom for one WS subscriber + occasional /health hits + rare /ota
-    // and room for a second WS client (phone + laptop). Framework reserves 3
-    // internally so effective ceiling is 7 concurrent app connections.
-    cfg.max_open_sockets = 10;
-    // Bound the ws_tx_task stall if a WS peer's TCP send blocks. Default is
-    // 5 s which is much too long for a 3000-fps stream — a broken client
-    // would stall the sender and the RX loop's queue fills fast.
+    // and room for a second WS client (phone + laptop). httpd caps this at
+    // LWIP_MAX_SOCKETS (10) minus 3 it reserves internally = 7.
+    cfg.max_open_sockets = 7;
+    // Bound the ws_tx_task stall if a WS peer's TCP send blocks. Field is
+    // seconds; 1 is the floor.
     cfg.send_wait_timeout = 1;
+    // Aggressive TCP keepalive so an ungracefully-closed WS peer (iOS Chrome
+    // swiped away — no FIN) gets reaped in ~5 s instead of the LWIP default
+    // (minutes). Without this the phantom fd stays in the client list and
+    // ws_tx_task keeps queuing sends to it, congesting the httpd control
+    // thread and making a fresh reconnect stagger behind the dead-fd timeouts.
+    cfg.keep_alive_enable   = true;
+    cfg.keep_alive_idle     = 2;   // seconds before first probe
+    cfg.keep_alive_interval = 1;   // seconds between probes
+    cfg.keep_alive_count    = 3;   // probes before giving up → ~5 s total
     ESP_ERROR_CHECK(httpd_start(&s_server, &cfg));
 
     static const httpd_uri_t root_uri = {
@@ -816,6 +891,57 @@ static void status_task(void *arg) {
 
 // -----------------------------------------------------------------------------
 
+// TWAI RX drain. Pinned to core 1 so a busy WiFi task on core 0 (e.g. TCP
+// retransmit storm to a half-open iOS peer) can never starve it. Previously
+// this loop lived inline in app_main and inherited the main task's core-0 /
+// priority-1 slot, which lost catastrophically to WiFi (priority 23) when a
+// phantom fd triggered retransmits — RX rate dropped from ~420 fps to ~27 fps
+// and rx_missed climbed at ~490/s. The pinning is the real fix; the phantom
+// cleanup in ws_tx_task complements it.
+static void rx_task(void *arg) {
+    (void)arg;
+    char line[SLCAN_MAX_LINE_BYTES];
+    twai_message_t msg;
+    while (true) {
+        if (twai_lib_receive(&msg, portMAX_DELAY)) {
+            // On-device timestamp per ADR 0018. `esp_timer_get_time()` is µs
+            // since boot, monotonic — same clock /health uptime uses.
+            int64_t ts_us = esp_timer_get_time();
+            int prefix_n = snprintf(
+                line, SLCAN_TS_PREFIX_MAX + 1, "(%lld.%06lld) ",
+                (long long)(ts_us / 1000000), (long long)(ts_us % 1000000));
+            if (prefix_n < 0 || prefix_n >= (int)SLCAN_TS_PREFIX_MAX) {
+                prefix_n = 0;  // pathological — emit unprefixed rather than corrupt
+            }
+            size_t frame_n = slcan_format_frame(&msg, line + prefix_n);
+            size_t n = (size_t)prefix_n + frame_n;
+
+            write_locked(line, n);
+            atomic_fetch_add_explicit(&frames_seen, 1, memory_order_relaxed);
+            status_led_pulse_rx();
+
+            // Ring first: the ring is the durable(-ish) side, WS is
+            // opportunistic. If the queue drop-newest fires we still have
+            // the frame in the ring for /capture?since=.
+            ring_write(ts_us, line, n);
+
+            // Fan out to WS clients via the sender task. Drop-newest on queue
+            // full — bumps frames_ws_dropped for the "capture degraded"
+            // signal on /health.
+            ws_item_t slot;
+            slot.ts_us = ts_us;
+            slot.len   = (uint8_t)n;
+            memcpy(slot.buf, line, n);
+            if (xQueueSendToBack(ws_tx_q, &slot, 0) != pdPASS) {
+                atomic_fetch_add_explicit(&frames_ws_dropped, 1,
+                                         memory_order_relaxed);
+            }
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+
 void app_main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     stdout_mutex = xSemaphoreCreateMutex();
@@ -878,42 +1004,7 @@ void app_main(void) {
     // in pending-verify state (e.g. first flash via USB, not from OTA).
     esp_ota_mark_app_valid_cancel_rollback();
 
-    char line[SLCAN_MAX_LINE_BYTES];
-    twai_message_t msg;
-    while (true) {
-        if (twai_lib_receive(&msg, portMAX_DELAY)) {
-            // On-device timestamp per ADR 0018. `esp_timer_get_time()` is µs
-            // since boot, monotonic — same clock /health uptime uses.
-            int64_t ts_us = esp_timer_get_time();
-            int prefix_n = snprintf(
-                line, SLCAN_TS_PREFIX_MAX + 1, "(%lld.%06lld) ",
-                (long long)(ts_us / 1000000), (long long)(ts_us % 1000000));
-            if (prefix_n < 0 || prefix_n >= (int)SLCAN_TS_PREFIX_MAX) {
-                prefix_n = 0;  // pathological — emit unprefixed rather than corrupt
-            }
-            size_t frame_n = slcan_format_frame(&msg, line + prefix_n);
-            size_t n = (size_t)prefix_n + frame_n;
-
-            write_locked(line, n);
-            atomic_fetch_add_explicit(&frames_seen, 1, memory_order_relaxed);
-            status_led_pulse_rx();
-
-            // Ring first: the ring is the durable(-ish) side, WS is
-            // opportunistic. If the queue drop-newest fires we still have
-            // the frame in the ring for /capture?since=.
-            ring_write(ts_us, line, n);
-
-            // Fan out to WS clients via the sender task. Drop-newest on queue
-            // full — bumps frames_ws_dropped for the "capture degraded"
-            // signal on /health.
-            ws_item_t slot;
-            slot.ts_us = ts_us;
-            slot.len   = (uint8_t)n;
-            memcpy(slot.buf, line, n);
-            if (xQueueSendToBack(ws_tx_q, &slot, 0) != pdPASS) {
-                atomic_fetch_add_explicit(&frames_ws_dropped, 1,
-                                         memory_order_relaxed);
-            }
-        }
-    }
+    // RX drain runs on core 1, isolated from WiFi/httpd on core 0. See rx_task.
+    xTaskCreatePinnedToCore(rx_task, "twai_rx", 4096,
+                            NULL, tskIDLE_PRIORITY + 5, NULL, 1);
 }
