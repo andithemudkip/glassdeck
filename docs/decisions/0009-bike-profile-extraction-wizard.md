@@ -1,7 +1,7 @@
 # 0009 — Bike-profile extraction wizard
 
 **Date:** 2026-06-22
-**Status:** Proposed
+**Status:** Superseded by [ADR 0019](0019-browser-signal-discovery-wizard.md)
 
 ## Context
 
