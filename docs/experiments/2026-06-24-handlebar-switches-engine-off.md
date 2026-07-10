@@ -1,6 +1,9 @@
 ---
 date: 2026-06-24
-status: planned
+status: superseded
+superseded_by:
+  - docs/hardware/dash-connector.md
+  - docs/experiments/2026-07-10-brakes-stationary.md
 phase: 1
 related:
   findings:
@@ -15,10 +18,44 @@ related:
     - 2026-06-18-side-stand-toggle
     - 2026-06-18-kill-switch-toggle
     - 2026-06-21-cross-session-payload-diff
+    - 2026-07-10-brakes-stationary
   logs: []
 ---
 
 # Handlebar switches, engine off — left/right indicators, high beam, horn
+
+> **Superseded — not run.** The four primary targets of this plan were
+> answered by evidence that came in after 2026-06-24 without needing a
+> capture session:
+>
+> - **Left/right indicators + high beam** — [`docs/hardware/dash-connector.md`](../hardware/dash-connector.md)
+>   (2026-07-01, from the repair-manual schematic) confirms all three are
+>   **off-bus, dedicated wires on X10** (pins 11, 12, 8). The OEM dash
+>   physically has to read them there to drive its lamps; there's no
+>   dashboard-side motivation to duplicate them on CAN. Replacement dash
+>   reads them as level-shifted GPIO, same treatment as fuel level.
+>   Catalog rows for "Turn signal" and "High beam" already flipped from
+>   `open` to `off-bus`.
+> - **Brake-lever switches** — indirectly covered by
+>   [[2026-07-10-brakes-stationary]], which pulled each brake lever
+>   through its entire travel (gentle → medium → hard) six times per
+>   side, well past the ~5 mm switch-close point. No bit on any of the
+>   11 always-on IDs flipped in correlation. Brake-lever switch is not
+>   on the always-on broadcast set.
+> - **Kill switch** — already documented as doubly-wired via
+>   [[signal-kill-switch]] (CAN) and X10 pin 5 (schematic mirror).
+>
+> **Residual open question, low priority:** horn. Not on X10, not in the
+> dash user manual (the OEM dash has no horn indicator — horn is
+> functional, not a display), so the replacement dash has no reason to
+> know when it's pressed. Would only surface as CAN-corpus enrichment.
+> Not worth its own session; if a future engine-off procedure has 60 s
+> of idle time, a couple of horn taps could be piggy-backed as
+> auto-marks then.
+>
+> Preserved per repo rule #3 ("preserve failed experiments") — the plan
+> below is the state of the reasoning on 2026-06-24, before the
+> schematic mapping shrank the problem.
 
 Decode the handlebar switchgear. **Primary target: left/right turn-signal state**, which is the #1 stated motivation for the whole project (`docs/research.md` — "Separate left/right indicator icons"). **Secondary: high beam**, which lights a dedicated dash indicator (`bike/dash-warning-catalog.md`) and is therefore definitely broadcast somewhere. **Tertiary, free piggy-backs in the same session: horn and brake levers.**
 

@@ -532,8 +532,10 @@ def main() -> int:
         sys.stderr.write(f"capture session: {session_dir}\n")
     source = "stdin" if args.stdin else args.port
     sys.stderr.write(f"source: {source}   bitrate: {args.bitrate} bps   firmware: {fw_rev or 'unknown'}\n")
-    if args.stdin:
+    if args.stdin and not args.live:
         sys.stderr.write("stdin mode: hotkeys disabled. Ctrl-C or EOF to stop.\n\n")
+    elif args.live:
+        sys.stderr.write("live mode: keys go to the TUI via /dev/tty. q or Ctrl-C to stop.\n\n")
     else:
         sys.stderr.write("press '?' for hotkey legend, 'q' or Ctrl-C to stop.\n\n")
 
@@ -553,6 +555,23 @@ def main() -> int:
     silence_warned = False
     last_status = 0.0
     ts_normalizer = TimestampNormalizer()
+
+    # Textual's Unix driver reads keys from fd 0. In --stdin --live, fd 0 is
+    # the SLCAN pipe (e.g. `websocat | capture.py --stdin --experiment ...`),
+    # so every printable byte in a CAN frame lands as a keypress → mark spam.
+    # Swap fd 0 to /dev/tty and let the capture loop read SLCAN from the
+    # original pipe via a saved fd.
+    slcan_source = sys.stdin.buffer
+    if args.stdin and args.live:
+        try:
+            saved_stdin_fd = os.dup(0)
+            tty_fd = os.open("/dev/tty", os.O_RDONLY)
+            os.dup2(tty_fd, 0)
+            os.close(tty_fd)
+            sys.stdin = os.fdopen(0, "r", buffering=1)
+            slcan_source = os.fdopen(saved_stdin_fd, "rb", buffering=0)
+        except OSError as e:
+            sys.exit(f"--stdin --live needs a controllable /dev/tty for the TUI: {e}")
 
     ser = None
     if not args.stdin:
@@ -592,8 +611,10 @@ def main() -> int:
                     # like `websocat -n` emit one payload per line with a
                     # trailing \n; the SLCAN line itself ends in \r, which the
                     # parser tolerates via the strip() at the top of
-                    # parse_slcan_line.
-                    line = sys.stdin.buffer.readline()
+                    # parse_slcan_line. In --live mode `slcan_source` is a
+                    # dup'd fd — sys.stdin has been rebound to /dev/tty for
+                    # Textual by then, so read explicitly from the saved pipe.
+                    line = slcan_source.readline()
                     if not line:
                         stop.set()
                         break

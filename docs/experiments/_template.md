@@ -1,6 +1,6 @@
 ---
 date: YYYY-MM-DD
-status: planned | success | partial | failure | inconclusive
+status: planned | success | partial | failure | inconclusive | superseded
 phase: 0
 related:
   findings: []

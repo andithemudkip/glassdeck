@@ -1,0 +1,161 @@
+name: brakes-stationary
+description: >
+  Front-brake and rear-brake pressure hunt on a stationary, engine-off bike.
+  Escalating pulses (gentle/medium/hard) followed by sustained holds, on
+  each brake independently and then combined — distinguishes on/off switch
+  bits from analog pressure values, and unlocks any brake-driven byte on
+  fast-period IDs (121, 12D, 450, 540/541).
+experiment: 2026-07-10-brakes-stationary
+
+# Timing convention: marks fire at STEP START — the moment the rider is
+# cued to begin the press. Lever/pedal travel is ~200–500 ms and any bus
+# broadcast that responds should land within one broadcast period after
+# that. Steps are short (~4 s pulse cycle: 1.5 s press + 2.5 s settle) —
+# many reps in a short session — with generous 8 s inter-phase settles
+# for repositioning between the front lever and rear pedal.
+#
+# Engine OFF throughout: brake sensors run off ignition, and the null
+# window before Phase A is cleanest with no idle noise. Kill in RUN,
+# neutral, side stand down, bike stationary on both wheels.
+
+steps:
+  # ------------------------------------------------------------- Setup
+  - prompt: "Key OFF, kill RUN, neutral, side stand down. Bike on both wheels, stationary. Hands off. Recording bus silence."
+    duration_secs: 6
+
+  - prompt: "Turn key ON now. Do NOT press the starter — engine stays OFF for this whole session."
+    duration_secs: 20
+    countdown_from: 3
+    mark: { key: mark, label: "key on (engine off)" }
+
+  - prompt: "Baseline — hands off both brakes, feet off pedal. 20 s of clean pre-brake broadcast."
+    duration_secs: 20
+    mark: { key: mark, label: "pre-brake baseline start" }
+
+  # ----------------------------------------------- Phase A — front pulses
+  - prompt: "PHASE A — front brake pulses. Right hand on the FRONT lever. Six pulses coming: 2 gentle, 2 medium, 2 hard."
+    duration_secs: 8
+
+  - prompt: "GENTLE front pulse (~30 % lever travel, ~1.5 s). Release cleanly."
+    duration_secs: 5
+    countdown_from: 3
+    mark: { key: mark, label: "front pulse 1 gentle (~30 %)" }
+
+  - prompt: "GENTLE front pulse again."
+    duration_secs: 5
+    countdown_from: 3
+    mark: { key: mark, label: "front pulse 2 gentle (~30 %)" }
+
+  - prompt: "MEDIUM front pulse (~60 %, ~1.5 s)."
+    duration_secs: 5
+    countdown_from: 3
+    mark: { key: mark, label: "front pulse 3 medium (~60 %)" }
+
+  - prompt: "MEDIUM front pulse again."
+    duration_secs: 5
+    countdown_from: 3
+    mark: { key: mark, label: "front pulse 4 medium (~60 %)" }
+
+  - prompt: "HARD front pulse — firm stop, ~1.5 s. Do not damage anything, but squeeze meaningfully."
+    duration_secs: 5
+    countdown_from: 3
+    mark: { key: mark, label: "front pulse 5 hard" }
+
+  - prompt: "HARD front pulse again."
+    duration_secs: 5
+    countdown_from: 3
+    mark: { key: mark, label: "front pulse 6 hard" }
+
+  - prompt: "Settle — hands off both brakes."
+    duration_secs: 8
+
+  # --------------------------------------------- Phase B — front sustained
+  - prompt: "PHASE B — front SUSTAINED. Squeeze front lever to MEDIUM pressure and HOLD steady for 12 s. This distinguishes a level signal (plateau) from a rate signal (spike + return)."
+    duration_secs: 16
+    countdown_from: 3
+    mark: { key: mark, label: "front sustained medium (12 s hold start)" }
+
+  - prompt: "Release. Settle — hands off both brakes."
+    duration_secs: 8
+
+  # ------------------------------------------------ Phase C — rear pulses
+  - prompt: "PHASE C — rear brake pulses. Right foot on the REAR pedal. Six pulses coming."
+    duration_secs: 8
+
+  - prompt: "GENTLE rear pulse (~30 % pedal travel, ~1.5 s)."
+    duration_secs: 5
+    countdown_from: 3
+    mark: { key: mark, label: "rear pulse 1 gentle (~30 %)" }
+
+  - prompt: "GENTLE rear pulse again."
+    duration_secs: 5
+    countdown_from: 3
+    mark: { key: mark, label: "rear pulse 2 gentle (~30 %)" }
+
+  - prompt: "MEDIUM rear pulse (~60 %)."
+    duration_secs: 5
+    countdown_from: 3
+    mark: { key: mark, label: "rear pulse 3 medium (~60 %)" }
+
+  - prompt: "MEDIUM rear pulse again."
+    duration_secs: 5
+    countdown_from: 3
+    mark: { key: mark, label: "rear pulse 4 medium (~60 %)" }
+
+  - prompt: "HARD rear pulse — firm."
+    duration_secs: 5
+    countdown_from: 3
+    mark: { key: mark, label: "rear pulse 5 hard" }
+
+  - prompt: "HARD rear pulse again."
+    duration_secs: 5
+    countdown_from: 3
+    mark: { key: mark, label: "rear pulse 6 hard" }
+
+  - prompt: "Settle — foot off pedal."
+    duration_secs: 8
+
+  # ---------------------------------------------- Phase D — rear sustained
+  - prompt: "PHASE D — rear SUSTAINED. Push rear pedal to MEDIUM pressure and HOLD steady for 12 s."
+    duration_secs: 16
+    countdown_from: 3
+    mark: { key: mark, label: "rear sustained medium (12 s hold start)" }
+
+  - prompt: "Release. Settle — hands and feet off."
+    duration_secs: 8
+
+  # ------------------------------------------------- Phase E — both together
+  - prompt: "PHASE E — BOTH brakes together. Front lever AND rear pedal simultaneously. Three pulses then one sustained hold."
+    duration_secs: 8
+
+  - prompt: "MEDIUM front + rear pulse together (~1.5 s)."
+    duration_secs: 6
+    countdown_from: 3
+    mark: { key: mark, label: "both pulse 1 medium" }
+
+  - prompt: "MEDIUM front + rear pulse together."
+    duration_secs: 6
+    countdown_from: 3
+    mark: { key: mark, label: "both pulse 2 medium" }
+
+  - prompt: "HARD front + rear pulse together."
+    duration_secs: 6
+    countdown_from: 3
+    mark: { key: mark, label: "both pulse 3 hard" }
+
+  - prompt: "SUSTAINED both — MEDIUM pressure on both, HOLD 8 s."
+    duration_secs: 12
+    countdown_from: 3
+    mark: { key: mark, label: "both sustained medium (8 s hold start)" }
+
+  - prompt: "Release. Settle — hands and feet off. Tail baseline."
+    duration_secs: 10
+
+  # ----------------------------------------------------------- Shutdown
+  - prompt: "Key OFF. Hold 4 s of tail silence."
+    duration_secs: 6
+    countdown_from: 3
+    mark: { key: mark, label: "key off" }
+
+  - prompt: "Done. Press q to stop capture and fill in session.md."
+    duration_secs: null

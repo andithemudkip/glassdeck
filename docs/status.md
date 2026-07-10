@@ -2,7 +2,7 @@
 
 **Phase:** 1 — CAN logger / capture inventory.
 
-**Last touched:** 2026-07-09 — wifi-bridge bench-verified on the bike (M1–M6 + M7a end-to-end, F7-powered, key-on idle). Two firmware bugs found + fixed in the session; the RX-loop-must-live-on-core-1 lesson is promoted to a finding. See [[2026-07-09-wifi-bridge-first-on-bike]].
+**Last touched:** 2026-07-10 — first procedure-driven wifi-bridge capture end-to-end (`bin/experiment-wifi-bridge`), brake-hunt experiment. Front and rear brake input not visible on the always-on set stationary/engine-off; wifi procedure pipeline validated (21 auto-marks landing exactly on the YAML cadence). See [[2026-07-10-brakes-stationary]].
 
 ## Blocked on
 
@@ -18,16 +18,16 @@ Nothing — pick from Next actions.
 
 Ordered by expected value; pick one.
 
-1. **First ride capture with wifi-bridge.** Throttle sweeps + wheel-speed signals under motion — closes the wifi-bridge validation loop and unblocks items 5–6 below. Prep: enclosure (bare perfboard right now); residual bench items (phone-side OPFS export, `/mark`, 60 s ring-overflow) in [[2026-07-09-wifi-bridge-first-on-bike]] follow-ups.
-2. **Phase E of [[2026-06-18-engine-on-stationary-inputs]]** — five RPM setpoints in neutral (~2000/2500/3500/4500/5500), 12 s each. Discriminates:
+1. **First ride capture with wifi-bridge.** Throttle sweeps + wheel-speed signals under motion — closes the wifi-bridge validation loop and unblocks items 5–6 below. Also folds in the **motion brake follow-up** from [[2026-07-10-brakes-stationary]]: a walking-pace phase with 3–4 hard front-brake pulses covers the one remaining plausible gate (ABS ECU suppressing brake broadcasts at zero wheel speed) at ~zero session cost. If that comes up empty too, promote to `brake-input-absent-from-broadcasts` finding — no need for a standalone engine-on stationary brake session (engine-on gating has no plausible mechanism for a body/chassis input; see [[2026-07-10-brakes-stationary]] Interpretation). Prep: enclosure (bare perfboard right now); residual bench items (phone-side OPFS export, `/mark`, 60 s ring-overflow) in [[2026-07-09-wifi-bridge-first-on-bike]] follow-ups.
+3. **Phase E of [[2026-06-18-engine-on-stationary-inputs]]** — five RPM setpoints in neutral (~2000/2500/3500/4500/5500), 12 s each. Discriminates:
    - [[signal-warmup-index]] throttle-derived vs RPM-derived vs load-derived (currently `contradicted_by`);
    - [[byte-121-twin-int16]] semantic quantity (ignition advance vs fuel trim);
    - [[signal-12d-d1-bit0]] RPM-keyed vs vehicle-speed-keyed threshold.
-3. **Targeted bike-side capture** on the three bytes the corpus sweep narrowed to one moving byte each: `12A` D1, `12E` D6, `5A0` D4. Plus `129` D0 bits 0/2 and `121` channels A/B at fixed RPM with slow throttle excursion. See [[2026-06-30-unknown-byte-corpus-sweep]] for the shortlist.
-4. **[[2026-06-24-fuel-level-walkdown]]** — queued to falsify the off-bus assumption in [[project-fuel-on-can]]. Fuel *consumption* on CAN is already closed ([[fuel-consumption-absent-from-broadcasts]]); this is about level only.
-5. **Rear wheel-speed LSB** — currently best-fit 0.05633 km/h with a ~10 % gap from 1/16. Resolves via authoritative KTM 390 gearing/rolling-circumference or an OEM-speedo cross-check during a real motion capture.
-6. **ABS-lamp threshold value** — needs engine-on motion capture crossing ~6 km/h. Also verifies the provisional engine-running precondition on [[bike/dash-warning-lights]].
-7. **`541` D1** — flagged as a candidate derived-coolant byte but only one moving session so far. Needs replication under a cold→warm walk.
+4. **Targeted bike-side capture** on the three bytes the corpus sweep narrowed to one moving byte each: `12A` D1, `12E` D6, `5A0` D4. Plus `129` D0 bits 0/2 and `121` channels A/B at fixed RPM with slow throttle excursion. See [[2026-06-30-unknown-byte-corpus-sweep]] for the shortlist.
+5. **[[2026-06-24-fuel-level-walkdown]]** — queued to falsify the off-bus assumption in [[project-fuel-on-can]]. Fuel *consumption* on CAN is already closed ([[fuel-consumption-absent-from-broadcasts]]); this is about level only.
+6. **Rear wheel-speed LSB** — currently best-fit 0.05633 km/h with a ~10 % gap from 1/16. Resolves via authoritative KTM 390 gearing/rolling-circumference or an OEM-speedo cross-check during a real motion capture.
+7. **ABS-lamp threshold value** — needs engine-on motion capture crossing ~6 km/h. Also verifies the provisional engine-running precondition on [[bike/dash-warning-lights]].
+8. **`541` D1** — flagged as a candidate derived-coolant byte but only one moving session so far. Needs replication under a cold→warm walk.
 
 ## Open questions (from `docs/research.md`)
 
