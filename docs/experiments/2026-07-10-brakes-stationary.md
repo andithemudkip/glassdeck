@@ -78,9 +78,9 @@ Cannot yet distinguish (1) or (2) from (3) — needs a follow-up capture.
 
 ## Follow-ups
 
-- **Rule out (1) engine-on gating**: engine-on stationary brake sweep (same procedure, engine idling). If nothing new moves, that's engine-on gating eliminated too.
-- **Rule out (2) motion gating**: paddock-stand rolling brake sweep (rear wheel spinning by hand, brake pulses). Requires rear paddock stand + one operator to push, another to brake — do together with the engine-on rear-spin capture already on file (`2026-06-23-engine-driven-rear-spin`) if convenient.
-- **If both come back empty** → promote to `docs/findings/can/brake-input-absent-from-broadcasts.md`, sibling to `fuel-consumption-absent-from-broadcasts` and `battery-voltage-absent-from-always-on-broadcasts`. Implies the brake-light switch state — which the wiring harness must expose to the dash — is either analog-only or on a chassis bus we can't see, and the replacement dash will need a direct switch tap parallel to how [[project-fuel-on-can]] handles fuel level.
+- **Motion gating** is the only remaining plausible gate. Piggy-back onto the first-ride motion capture (status next-action #1): a walking-pace phase with 3–4 hard front-brake pulses. Covers gate (2) at ~zero session cost.
+- **Skip an engine-on stationary re-run.** Engine-on gating (gate 1) has no plausible mechanism for a body/chassis input like brake — every other engine-on-only signal in the corpus (`warmup_index`, `engine_on_counter`, `121` twin int16, engine-state bits) is engine-management, not chassis. A negative result there would be uninformative; not worth its own session.
+- **If the motion phase also comes up empty** → promote to `docs/findings/can/brake-input-absent-from-broadcasts.md`, sibling to `fuel-consumption-absent-from-broadcasts` and `battery-voltage-absent-from-always-on-broadcasts`. Implies the brake-light switch state — which the wiring harness must expose to the dash — is either analog-only or on a chassis bus we can't see. Given [[docs/hardware/dash-connector.md]] has no brake input pins on X10, the replacement dash likely doesn't need brake state at all (OEM dash never displayed it).
 - **Positive `541` D5 finding**: a control experiment (key-on + 4 min hands-off, no brake) would pin down whether `541` D5 flips at a fixed time-since-key-on or is genuinely stochastic. Cheap add-on to any future engine-off session.
 
 ## Ancillary output
