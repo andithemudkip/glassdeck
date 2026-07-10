@@ -89,14 +89,40 @@ LEGEND = """
 _TS_PREFIX_RE = re.compile(rb"^\((\d+)\.(\d+)\)\s+")
 
 
-def parse_slcan_line(line: bytes, timestamp: float):
+class TimestampNormalizer:
+    """Aligns wifi-bridge `(sec.us)` prefixes onto the host wall clock.
+
+    The wifi-bridge stamps every frame with `esp_timer_get_time()`, i.e.
+    µs-since-ESP32-boot. events.csv marks are host wall clock. Left raw,
+    capture.log frames and events.csv marks live on different time bases
+    — every analyzer would need a shift table. Instead, we compute the
+    offset from the first prefixed frame and shift all subsequent
+    prefixed frames by it, so capture.log matches events.csv in-place.
+
+    USB captures pass through untouched (no prefix → returns host_ts).
+    `offset` is set on the first prefixed frame; None otherwise.
+    """
+
+    def __init__(self) -> None:
+        self.offset: float | None = None
+
+    def normalize(self, prefix_ts: float | None, host_ts: float) -> float:
+        if prefix_ts is None:
+            return host_ts
+        if self.offset is None:
+            self.offset = host_ts - prefix_ts
+        return prefix_ts + self.offset
+
+
+def parse_slcan_line(line: bytes, timestamp: float, normalizer: TimestampNormalizer | None = None):
     """Parse one SLCAN line into a `can.Message`, or return None.
 
     Returns None for empty lines, firmware `# ...` status comments, and
     malformed frames. If the line carries a wifi-bridge `(<sec>.<us>) `
-    prefix, the parsed send-time replaces the host `timestamp` argument.
-    Importing `can` lazily so this module loads even when python-can
-    isn't installed yet.
+    prefix, the parsed send-time is normalized through `normalizer` (or
+    used raw if none is given, preserving legacy behavior for any
+    ad-hoc importers). Importing `can` lazily so this module loads even
+    when python-can isn't installed yet.
     """
     import can
 
@@ -104,12 +130,18 @@ def parse_slcan_line(line: bytes, timestamp: float):
     if not s:
         return None
     m = _TS_PREFIX_RE.match(s)
+    prefix_ts: float | None = None
     if m is not None:
         try:
-            timestamp = float(m.group(1)) + float(m.group(2)) / 1_000_000.0
+            prefix_ts = float(m.group(1)) + float(m.group(2)) / 1_000_000.0
         except ValueError:
-            pass  # keep host timestamp
+            prefix_ts = None
         s = s[m.end():]
+    if prefix_ts is not None:
+        if normalizer is not None:
+            timestamp = normalizer.normalize(prefix_ts, timestamp)
+        else:
+            timestamp = prefix_ts
     head = s[:1]
     if head not in (b"t", b"T", b"r", b"R"):
         return None
@@ -278,12 +310,21 @@ def write_session_stub(
     total_frames: int,
     unique_ids: int,
     event_count: int,
+    time_offset: float | None = None,
 ) -> None:
     path = session_dir / "session.md"
     if path.exists():
         return
     fw_line = f"can-logger @ {fw_rev}" if fw_rev else "can-logger @ <TODO: commit hash>"
     bitrate_kbps = bitrate // 1000
+    if time_offset is None:
+        clock_line = "**Clock:** host wall-clock (no `(sec.us)` prefix seen)"
+    else:
+        clock_line = (
+            f"**Clock:** wifi-bridge `(sec.us)` prefixes normalized to host wall-clock "
+            f"(added +{time_offset:.6f} s to every frame; capture.log frames and "
+            f"events.csv marks share one time base)"
+        )
     content = f"""# Session: {session_dir.name}
 
 **Firmware:** {fw_line}
@@ -294,6 +335,7 @@ def write_session_stub(
 **Total frames:** {total_frames}
 **Unique IDs:** {unique_ids}
 **Event marks:** {event_count}  (see events.csv)
+{clock_line}
 
 ## Bike state
 <TODO: ignition position, gear, engine running, ambient temp, anything odd>
@@ -315,9 +357,11 @@ def main() -> int:
         action="store_true",
         help="Read SLCAN from stdin instead of a serial port. Intended for "
              "`websocat -n ws://<esp>/stream | capture.py --stdin --label <lbl>`. "
-             "Incompatible with --live / --watch / --experiment (they need stdin "
-             "for hotkeys). No silence-warn diagnostic — SLCAN reception depends "
-             "on whatever produced the stdin bytes, out of our control.",
+             "Combines with --live / --experiment — the Textual TUI reads "
+             "keys from /dev/tty, so stdin stays free for frames. Incompatible "
+             "with --watch (rider-side watch has no reason to consume network "
+             "capture bytes). No silence-warn diagnostic — SLCAN reception "
+             "depends on whatever produced the stdin bytes, out of our control.",
     )
     parser.add_argument("--label", default="capture", help="Session label (becomes part of logs/<date>-<label>/)")
     parser.add_argument("--bitrate", type=int, default=500_000, help="CAN bitrate in bps (must match firmware build)")
@@ -438,9 +482,8 @@ def main() -> int:
         sys.exit("--stdin and --port are mutually exclusive.")
     if not args.stdin and not args.port:
         sys.exit("either --port <device> or --stdin is required.")
-    if args.stdin and (args.live or args.watch or args.experiment):
-        sys.exit("--stdin is incompatible with --live / --watch / --experiment "
-                 "(those modes need stdin for keystrokes).")
+    if args.stdin and args.watch:
+        sys.exit("--stdin is incompatible with --watch.")
 
     try:
         import can
@@ -509,6 +552,7 @@ def main() -> int:
     unique_ids: set[int] = set()
     silence_warned = False
     last_status = 0.0
+    ts_normalizer = TimestampNormalizer()
 
     ser = None
     if not args.stdin:
@@ -566,7 +610,7 @@ def main() -> int:
 
                 if ready:
                     ts = time.time()
-                    msg = parse_slcan_line(line, ts)
+                    msg = parse_slcan_line(line, ts, ts_normalizer)
                     if msg is not None:
                         writer.on_message_received(msg)
                         total_frames += 1
@@ -618,12 +662,10 @@ def main() -> int:
         sys.stderr.flush()
 
     try:
-        if args.stdin:
-            # No KeyReader — stdin is consumed for data, not keystrokes.
-            capture_loop(on_status_cb=write_status_line)
-        elif args.live:
-            # Live mode: Textual owns the terminal + input; capture loop
-            # runs in a worker thread, frames cross via LiveBridge.
+        if args.live:
+            # Live mode: Textual owns the terminal + input (reads /dev/tty);
+            # capture loop runs in a worker thread, frames cross via LiveBridge.
+            # Works with either --port or --stdin — capture_loop branches on args.stdin.
             from live_view import LiveBridge, LiveView  # type: ignore
             from signals import load_signals  # type: ignore
 
@@ -663,6 +705,9 @@ def main() -> int:
             finally:
                 stop.set()
                 worker.join(timeout=2.0)
+        elif args.stdin:
+            # No KeyReader — stdin is consumed for data, not keystrokes.
+            capture_loop(on_status_cb=write_status_line)
         else:
             with KeyReader(events, stop):
                 capture_loop(
@@ -699,6 +744,7 @@ def main() -> int:
             total_frames,
             len(unique_ids),
             events.count,
+            time_offset=ts_normalizer.offset,
         )
         sys.stderr.write(
             f"\ncaptured {total_frames} frames, {len(unique_ids)} unique IDs, {events.count} event marks.\n"

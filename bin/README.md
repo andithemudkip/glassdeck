@@ -24,6 +24,7 @@ Use `logger-250k` to build the 250 kbps fallback logger.
 |---|---|
 | `capture-usb <label> [--port …] [extra args]` | Auto-detects `/dev/tty.usbmodem*` and runs `scripts/capture.py`. Extra flags pass through (`--bitrate`, `--experiment`, `--watch`, …). |
 | `capture-wifi-bridge <label> [host] [extra args]` | Pipes `ws://<host>/stream` into `scripts/capture.py --stdin`. Requires `websocat`. For rider-side captures use the browser at `http://<host>/` — its OPFS path survives WS drops, this desk pipe does not. |
+| `experiment-wifi-bridge <label> <procedure.yaml> [host] [extra args]` | Same pipe as `capture-wifi-bridge`, plus `--experiment <yaml>` so the operator TUI drives a procedure over WiFi. Desk-side only; does not survive WS drops. |
 
 ## wifi-bridge ops
 

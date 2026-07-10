@@ -23,7 +23,7 @@ bike-dash/
 │   ├── status.md              current phase, blockers, next actions (volatile)
 │   ├── decisions/             ADR-style records: choice + reasoning
 │   ├── experiments/           chronological log of attempts (incl. failures)
-│   ├── findings/              distilled current-best knowledge
+│   ├── findings/               distilled current-best knowledge
 │   │   ├── can/               decoded CAN behavior (per ID or signal)
 │   │   ├── hardware/          confirmed hardware behavior
 │   │   └── bike/              bike-system behavior (ECU, dash, immobilizer)
@@ -32,7 +32,8 @@ bike-dash/
 │   └── signals/               canonical CAN signal definitions (eventual .dbc)
 ├── logs/                      raw CAN captures, immutable
 ├── scripts/                   Python tooling: parsers, decoders, analyzers
-└── firmware/                  ESP32 firmware
+├── bin/                       thin wrappers around common commands
+└── firmware/                   ESP32 firmware
 ```
 
 ## Where things go

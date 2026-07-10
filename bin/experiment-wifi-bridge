@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Run a procedure YAML over the wifi-bridge WebSocket stream.
+# Usage: experiment-wifi-bridge <label> <procedure.yaml> [host] [extra capture.py args...]
+#
+# Pipes SLCAN from ws://<host>/stream into 'scripts/capture.py --stdin
+# --experiment <yaml>' — the operator TUI drives the rider through the
+# procedure and auto-marks step cues; SLCAN reception is over WiFi, so
+# hotkeys stay on /dev/tty and stdin carries frames.
+#
+# Desk/laptop path only. Rider-side procedure runs still belong in the
+# browser at http://<host>/ once its OPFS-backed procedure UI ships —
+# this wrapper does not survive WS drops.
+#
+# Requires websocat: `brew install websocat`.
+
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+
+label="${1:-}"
+procedure="${2:-}"
+if [[ -z "$label" || -z "$procedure" || "$label" == "-h" || "$label" == "--help" ]]; then
+    cat >&2 <<EOF
+usage: experiment-wifi-bridge <label> <procedure.yaml> [host] [extra capture.py args]
+
+Pipes ws://<host>/stream into 'python scripts/capture.py --stdin
+--experiment <procedure.yaml>'. Default host is $DEFAULT_HOST. Requires
+websocat.
+
+For rider-side procedure runs prefer the browser at http://<host>/ once
+it grows a procedure UI — this desk pipe does not survive WS drops.
+EOF
+    exit 1
+fi
+shift 2
+
+[[ -f "$procedure" ]] || die "no such procedure yaml: $procedure"
+
+host="$DEFAULT_HOST"
+if [[ $# -gt 0 && "$1" != -* ]]; then
+    host="$1"; shift
+fi
+
+require_cmd websocat "brew install websocat"
+require_cmd python3
+
+info "streaming ws://$host/stream → logs/*-$label/ (procedure: $procedure)"
+cd "$REPO_ROOT"
+websocat -n "ws://$host/stream" | python3 scripts/capture.py \
+    --stdin --label "$label" --experiment "$procedure" "$@"
