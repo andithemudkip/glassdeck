@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Build wifi-bridge and OTA-flash it over WiFi.
+# Usage: ota-wifi-bridge [host]
+#
+# Default host is the AP address 192.168.4.1. If the bootloader can't reach
+# "WiFi + HTTP up" on the new image, rollback reverts to the previous slot.
+
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+
+host="${1:-$DEFAULT_HOST}"
+env="wifi-bridge"
+dir="$FIRMWARE_ROOT/wifi-bridge"
+bin_path="$dir/.pio/build/$env/firmware.bin"
+
+require_cmd pio "install PlatformIO — https://platformio.org"
+require_cmd curl
+
+info "building wifi-bridge"
+( cd "$dir" && pio run -e "$env" )
+[[ -f "$bin_path" ]] || die "build finished but $bin_path is missing"
+
+size=$(wc -c < "$bin_path" | tr -d ' ')
+info "uploading $bin_path ($size bytes) to http://$host/ota"
+curl --fail --show-error \
+    -X POST \
+    --data-binary "@$bin_path" \
+    -H "Content-Type: application/octet-stream" \
+    "http://$host/ota"
+echo
+info "OTA sent. Device is restarting; wait ~5 s then check with bin/wifi-bridge-health."

@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Post a mark into the wifi-bridge capture stream.
+# Usage: wifi-bridge-mark <label> [host]
+#
+# Inserts '# MARK <label>' into the ring at the current position and fans it
+# out on /stream. Label is trimmed and capped at 63 chars on the device side.
+
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+
+label="${1:-}"
+host="${2:-$DEFAULT_HOST}"
+
+if [[ -z "$label" || "$label" == "-h" || "$label" == "--help" ]]; then
+    cat >&2 <<EOF
+usage: wifi-bridge-mark <label> [host]
+
+Posts to http://<host>/mark?label=<label>. Empty labels are rejected by
+the device with a 400.
+EOF
+    exit 1
+fi
+
+require_cmd curl
+
+encoded=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$label")
+curl --fail --show-error --silent -X POST "http://$host/mark?label=$encoded"
+echo
+info "marked: $label"

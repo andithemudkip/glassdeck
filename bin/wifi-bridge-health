@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Fetch wifi-bridge /health and pretty-print it.
+# Usage: wifi-bridge-health [host]
+
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+
+host="${1:-$DEFAULT_HOST}"
+require_cmd curl
+
+if command -v jq >/dev/null 2>&1; then
+    curl --fail --show-error --silent "http://$host/health" | jq
+else
+    curl --fail --show-error "http://$host/health"
+    echo
+fi

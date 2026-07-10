@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Attach a serial monitor to the ESP32 over USB-CDC.
+# Usage: monitor-serial <can-logger|wifi-bridge> [env]
+#
+# For can-logger this stream is raw SLCAN — 't...\r' and 'T...\r' lines.
+# For wifi-bridge this is boot logs (SSID / password / IP), not the frame stream.
+
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+
+sub="${1:-}"
+env="${2:-}"
+
+if [[ -z "$sub" ]]; then
+    cat >&2 <<EOF
+usage: monitor-serial <can-logger|wifi-bridge> [env]
+
+Runs 'pio device monitor' against the subproject's port. Exit with Ctrl-].
+EOF
+    exit 1
+fi
+
+dir="$(resolve_subproject "$sub")"
+env="${env:-$(default_env_for "$sub")}"
+require_cmd pio "install PlatformIO — https://platformio.org"
+
+info "monitoring $sub (env: $env). Ctrl-] to exit."
+cd "$dir"
+pio device monitor -e "$env"

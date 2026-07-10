@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Build a firmware subproject with PlatformIO.
+# Usage: build-firmware <can-logger|wifi-bridge> [env]
+
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+
+sub="${1:-}"
+env="${2:-}"
+
+if [[ -z "$sub" ]]; then
+    cat >&2 <<EOF
+usage: build-firmware <can-logger|wifi-bridge> [env]
+
+  can-logger   default env: logger (500 kbps). Alt env: logger-250k.
+  wifi-bridge  default env: wifi-bridge.
+
+Runs 'pio run' in the subproject directory. Output binary lands in
+<subproject>/.pio/build/<env>/firmware.bin.
+EOF
+    exit 1
+fi
+
+dir="$(resolve_subproject "$sub")"
+env="${env:-$(default_env_for "$sub")}"
+require_cmd pio "install PlatformIO — https://platformio.org"
+
+info "building $sub (env: $env)"
+cd "$dir"
+pio run -e "$env"
+info "built: $dir/.pio/build/$env/firmware.bin"

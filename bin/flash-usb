@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Build and flash a firmware subproject over USB.
+# Usage: flash-usb <can-logger|wifi-bridge> [env]
+#
+# Talks to the ESP32-S3 over its native USB-Serial/JTAG port (the one labelled
+# "USB", not "UART"). PlatformIO auto-detects the port; pass PIO_UPLOAD_PORT
+# to override.
+
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+
+sub="${1:-}"
+env="${2:-}"
+
+if [[ -z "$sub" ]]; then
+    cat >&2 <<EOF
+usage: flash-usb <can-logger|wifi-bridge> [env]
+
+Compiles then flashes over the USB-Serial/JTAG port. Override the port with
+PIO_UPLOAD_PORT=/dev/tty.usbmodemXXX.
+EOF
+    exit 1
+fi
+
+dir="$(resolve_subproject "$sub")"
+env="${env:-$(default_env_for "$sub")}"
+require_cmd pio "install PlatformIO — https://platformio.org"
+
+info "flashing $sub (env: $env) via USB"
+cd "$dir"
+pio run -e "$env" -t upload
+info "flashed. Use 'bin/monitor-serial $sub' to watch the CDC output."

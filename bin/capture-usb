@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Start a USB-tethered CAN capture via scripts/capture.py.
+# Usage: capture-usb <label> [--port /dev/tty.usbmodemXXX] [extra capture.py args...]
+#
+# Auto-detects the ESP32 port if --port isn't passed. Writes to
+# logs/YYYY-MM-DD-<label>/. Ctrl-C or 'q' to stop.
+
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+
+label="${1:-}"
+if [[ -z "$label" || "$label" == "-h" || "$label" == "--help" ]]; then
+    cat >&2 <<EOF
+usage: capture-usb <label> [--port /dev/tty.usbmodemXXX] [extra capture.py args]
+
+Wraps 'python scripts/capture.py'. Auto-detects the USB port from
+/dev/tty.usbmodem*. Pass extra flags (--bitrate, --experiment, --watch, etc.)
+after the label.
+EOF
+    exit 1
+fi
+shift
+
+port=""
+extra=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --port) port="$2"; shift 2 ;;
+        --port=*) port="${1#*=}"; shift ;;
+        *) extra+=("$1"); shift ;;
+    esac
+done
+
+if [[ -z "$port" ]]; then
+    port="$(detect_usb_port)"
+fi
+
+require_cmd python3
+info "capturing to logs/*-$label/ from $port"
+cd "$REPO_ROOT"
+exec python3 scripts/capture.py --port "$port" --label "$label" "${extra[@]}"

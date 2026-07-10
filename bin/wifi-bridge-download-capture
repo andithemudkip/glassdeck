@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Download the wifi-bridge's current ring buffer as an SLCAN log.
+# Usage: wifi-bridge-download-capture <output-path> [host]
+#
+# GET /capture returns the entire ring (~27 s at 300 fps in the default
+# 512 KB budget). For splice-over-reconnect semantics use the browser at
+# http://<host>/ — this endpoint is a snapshot, not a resumed stream.
+
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+
+out="${1:-}"
+host="${2:-$DEFAULT_HOST}"
+
+if [[ -z "$out" || "$out" == "-h" || "$out" == "--help" ]]; then
+    cat >&2 <<EOF
+usage: wifi-bridge-download-capture <output-path> [host]
+
+Snapshots http://<host>/capture into <output-path>. Consume with
+'python scripts/capture.py --stdin --label <lbl> < <output-path>'.
+EOF
+    exit 1
+fi
+
+require_cmd curl
+
+info "downloading http://$host/capture → $out"
+curl --fail --show-error --silent "http://$host/capture" -o "$out"
+lines=$(wc -l < "$out" | tr -d ' ')
+bytes=$(wc -c < "$out" | tr -d ' ')
+info "wrote $lines lines, $bytes bytes"

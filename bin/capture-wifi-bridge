@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Start a WiFi-tethered CAN capture from the wifi-bridge WebSocket.
+# Usage: capture-wifi-bridge <label> [host] [extra capture.py args...]
+#
+# Pipes SLCAN from ws://<host>/stream into scripts/capture.py --stdin. Note
+# this is the desk/laptop path — for on-bike rider captures use the browser
+# at http://<host>/ (M4 OPFS capture), then Export and consume the file with
+# 'python scripts/capture.py --stdin --label <label> < downloaded.log'.
+#
+# Requires websocat: `brew install websocat`.
+
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+
+label="${1:-}"
+if [[ -z "$label" || "$label" == "-h" || "$label" == "--help" ]]; then
+    cat >&2 <<EOF
+usage: capture-wifi-bridge <label> [host] [extra capture.py args]
+
+Pipes ws://<host>/stream into 'python scripts/capture.py --stdin'. Default
+host is $DEFAULT_HOST. Requires websocat.
+
+For rider-side captures use the browser at http://<host>/ instead —
+OPFS survives WS drops, this desk path does not.
+EOF
+    exit 1
+fi
+shift
+
+host="$DEFAULT_HOST"
+if [[ $# -gt 0 && "$1" != -* ]]; then
+    host="$1"; shift
+fi
+
+require_cmd websocat "brew install websocat"
+require_cmd python3
+
+info "streaming ws://$host/stream → logs/*-$label/"
+cd "$REPO_ROOT"
+websocat -n "ws://$host/stream" | python3 scripts/capture.py --stdin --label "$label" "$@"
