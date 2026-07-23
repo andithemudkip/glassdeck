@@ -15,9 +15,11 @@ Index of decoded signals and per-ID payload coverage on the 2020 Husqvarna Svart
 | gear_position | `129` | D0 bits 7:4 enum (N, 1–6) | confirmed | [signal-gear-position](../findings/can/signal-gear-position.md) |
 | clutch | `129` | D0 bit 3 bool | confirmed | [signal-clutch](../findings/can/signal-clutch.md) |
 | shift_failed | `129` | D0 bit 1 bool | provisional | [signal-shift-failed](../findings/can/signal-shift-failed.md) |
-| wheel_speed_front | `12D` | D0:D1 bits 15:4, 12-bit BE, 1/10 km/h | provisional | [signal-wheel-speed-front](../findings/can/signal-wheel-speed-front.md) |
-| rear_speed_band | `12D` | D1 low nibble (bits 3:0), 4-bit uint, 25 km/h step | provisional | [signal-12d-d1-bit0](../findings/can/signal-12d-d1-bit0.md) |
+| wheel_speed_front | `12D` | D0 + D1 hi-nibble, 12-bit BE, 1/10 km/h | provisional | [signal-wheel-speed-front](../findings/can/signal-wheel-speed-front.md) |
+| wheel_speed_front (fine mirror) | `12D` | D3:D4 BE u16, ~0.0577 km/h/LSB (LSB provisional pending GPS/dash anchor) | confirmed | [byte-12d-d3-d4-front-mirror](../findings/can/byte-12d-d3-d4-front-mirror.md) |
 | wheel_speed_rear | `12D` | D5:D6 BE u16, ~0.0565 km/h | provisional | [signal-wheel-speed-rear](../findings/can/signal-wheel-speed-rear.md) |
+| wheel_speed_rear (coarse mirror) | `12D` | D2 u8, 1/10 km/h (wraps mod-256 above ~25.5 km/h) | confirmed | [signal-wheel-speed-rear](../findings/can/signal-wheel-speed-rear.md) |
+| rear_speed_band | `12D` | D1 low nibble (bits 3:0), 4-bit uint, 25 km/h step | provisional | [signal-12d-d1-bit0](../findings/can/signal-12d-d1-bit0.md) |
 | fuel_injection_setpoint | `540` | D1 u8 (ECU base fuel-injection setpoint, recomputed at ~1 Hz) | provisional | [signal-fuel-injection-setpoint](../findings/can/signal-fuel-injection-setpoint.md) |
 | side_stand | `540` | D3 bit 0 bool | confirmed | [signal-side-stand](../findings/can/signal-side-stand.md) |
 | coolant_temp | `540` | D5:D6 BE u16, 0.1 °C | confirmed | [signal-coolant-temp](../findings/can/signal-coolant-temp.md) |
@@ -38,7 +40,6 @@ Index of decoded signals and per-ID payload coverage on the 2020 Husqvarna Svart
 
 | Slot | ID | Location | Status | Finding |
 |---|---|---|---|---|
-| front-wheel-speed mirror | `12D` | D3:D4 BE u16, 3/64 km/h LSB | encoding confirmed on D4 (D3 unexercised < 12.7 km/h) | [byte-12d-d3-d4-front-mirror](../findings/can/byte-12d-d3-d4-front-mirror.md) |
 | engine-state bits (3×) | `121`, `540` | `121` D5.3; `540` D2.6, D3.4 | flips engine-on / engine-off, attribution open | [engine-state-bits-decay-shape](../findings/can/engine-state-bits-decay-shape.md) |
 | D7 checksum | 9 IDs | D7 | confirmed: 6-cycle XOR ⊕ 5-bit GF(2) hash of D0..D6 | [byte-d7-cycle-hash](../findings/can/byte-d7-cycle-hash.md) |
 
@@ -70,6 +71,8 @@ Cell legend:
 | `5B0` | 100 ms | S◐ kill-dup b4 (b0-3, b5-7 = 0) | 0 | 0 | 0 | 0 | 0 | 0 | h |
 
 `es` = engine-state bit (semantics open, see [engine-state-bits-decay-shape](../findings/can/engine-state-bits-decay-shape.md)).
+
+**`12D` wheel-speed layout.** Each wheel is broadcast twice on this ID — one fine 16-bit-ish encoding and one coarser encoding per wheel — plus a 4-bit rear-speed band on the low nibble of D1. Which byte position is labelled "canonical" vs "mirror" is historical discovery order, not ECU precedence: front canonical is the coarser 12-bit at 1/10 km/h (D0:D1), front mirror is the finer 16-bit at ~0.0577 km/h/LSB (D3:D4); rear canonical is the finer 16-bit at ~0.0565 km/h/LSB (D5:D6), rear mirror is the coarser 8-bit at 1/10 km/h (D2). Either encoding per wheel is a valid source of truth; downstream code that wants sub-km/h resolution should read the fine copy.
 
 ## Quick stats
 
