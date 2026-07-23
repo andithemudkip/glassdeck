@@ -75,6 +75,7 @@ def signal_to_dict(s: Signal) -> dict:
     two without renaming in their head."""
     d: dict = {
         "name": s.name,
+        "status": s.status,
         "arb": s.arbitration_id,
         "enc": s.encoding,
         "bit_length": s.bit_length,
@@ -93,12 +94,20 @@ def signal_to_dict(s: Signal) -> dict:
         # JSON object keys must be strings; the JS decoder coerces back
         # to integer keys via a Map keyed on raw integer.
         d["values"] = {str(k): v for k, v in s.values.items()}
+    if s.bands:
+        d["bands"] = dict(s.bands)
     return d
 
 
 def render_js(signals: list[Signal]) -> str:
-    confirmed = [s for s in signals if s.status == "confirmed"]
-    data = [signal_to_dict(s) for s in confirmed]
+    # Emit every non-partial signal — provisionals are rendered too so the
+    # rider surface shows SPEED / ABS / QS bits that are known-good enough
+    # for glance-use even before they're promoted. The `status` field rides
+    # along so the decoder can flag provisionals visually. `partial` (if we
+    # ever have any) stays excluded — that's for signals we don't yet
+    # decode end-to-end.
+    published = [s for s in signals if s.status in ("confirmed", "provisional")]
+    data = [signal_to_dict(s) for s in published]
     # One line per signal keeps the diff readable when signals.yaml grows.
     lines = ["const SIGNALS = ["]
     for entry in data:

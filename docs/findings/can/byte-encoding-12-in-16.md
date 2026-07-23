@@ -40,7 +40,7 @@ In all engine-off captures, every non-zero raw `(D0 << 8) | D1` value is a multi
 ## Where to look next
 
 - **Rear wheel speed `12D` D5:D6** — the same kind of scan against [[2026-06-23-engine-driven-rear-spin]] showed the rear *does* set its low nibble (16 202 frames of low-nibble-non-zero) — so rear D5:D6 is genuine 16-bit, with no protected nibble. The front-vs-rear asymmetry within `12D` is real and not just a scan artifact.
-- **`121` D0..D3 (twin int16 channels)** — already known to be signed-int16 BE pairs ([[byte-121-twin-int16]]); worth checking whether either channel has a stuck-zero low nibble or whether all 16 bits genuinely move.
+- **`121` D0..D3 (twin int16 channels)** — already known to be signed-int16 BE pairs ([[signal-engine-torque]]); worth checking whether either channel has a stuck-zero low nibble or whether all 16 bits genuinely move.
 - **Any future uint16-decoded signal** — add the modulo-16 check to the decoding scratchpad, *and* check the same against captures from multiple operating regimes before concluding the low bits are unused.
 
 ## Evidence

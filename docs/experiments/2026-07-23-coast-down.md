@@ -4,9 +4,9 @@ status: planned
 phase: 1
 related:
   findings:
-    - byte-121-twin-int16
+    - signal-engine-torque
     - fuel-consumption-derivation-from-torque
-    - signal-warmup-index
+    - signal-fuel-injection-setpoint
   decisions: []
   logs: []
 ---
@@ -20,11 +20,11 @@ If `121 D0:D1` (channel A) really carries signed engine torque, then during a co
 1. **`121_A` should be strongly negative** throughout the coast — engine is producing negative net torque (drivetrain drag) as the wheels drive it against its own internal friction and pumping losses.
 2. **At matched RPM in different gears, `121_A` should read the same value** — engine-brake torque is a property of the engine at that RPM, not the gear. This is the discriminator against alternate interpretations like "load-derived" or "throttle-derived with idle offset". Load and gear-ratio effects diverge sharply across gears; engine torque doesn't.
 
-If both hold, we upgrade [[byte-121-twin-int16]] from `provisional, signed-torque candidate` to `confirmed`. If only (1) holds, `121_A` is signed but not pure engine torque — maybe wheel torque or some cross-mixed quantity. If neither holds, the signed-torque hypothesis is dead and we owe the finding another rewrite.
+If both hold, we upgrade [[signal-engine-torque]] from `provisional, signed-torque candidate` to `confirmed`. If only (1) holds, `121_A` is signed but not pure engine torque — maybe wheel torque or some cross-mixed quantity. If neither holds, the signed-torque hypothesis is dead and we owe the finding another rewrite.
 
 A cheap secondary outcome: with rider mass + bike mass + rough aero drag known, the coast-down deceleration rate + the RPM trace at each moment gives us engine-brake torque in physical units (N·m). Compare against the raw `121_A` value at that moment to solve for the **LSB in N·m/LSB**. Currently the working estimate is 0.25 N·m/LSB but that was derived circularly from the fuel-consumption model. This measurement is independent.
 
-Also gets checked alongside: [[signal-warmup-index]] `540 D1` behaviour during coast (does it drop toward the coolant-keyed idle baseline as expected, or does it stay elevated?), and the `121 D6` shift-cut bit's out-of-window baseline holds (it shouldn't fire during coast-only).
+Also gets checked alongside: [[signal-fuel-injection-setpoint]] `540 D1` behaviour during coast (does it drop toward the coolant-keyed idle baseline as expected, or does it stay elevated?), and the `121 D6` shift-cut bit's out-of-window baseline holds (it shouldn't fire during coast-only).
 
 ## Setup
 
@@ -90,13 +90,13 @@ _TBD._
 
 _To fill after analysis. Expected patterns and their implications:_
 
-- **`121_A` cleanly negative + agrees across gears at matched RPM** ⇒ signed-torque hypothesis confirmed. [[byte-121-twin-int16]] promotes to `confirmed`; [[fuel-consumption-derivation-from-torque]] calibration LSB anchored.
+- **`121_A` cleanly negative + agrees across gears at matched RPM** ⇒ signed-torque hypothesis confirmed. [[signal-engine-torque]] promotes to `confirmed`; [[fuel-consumption-derivation-from-torque]] calibration LSB anchored.
 - **`121_A` negative but disagrees across gears** ⇒ signal is signed but not pure engine torque. Candidate reinterpretations: wheel torque estimate (would scale with gear ratio) or something else.
-- **`121_A` doesn't go strongly negative in coast** ⇒ signed-torque interpretation fails. Back to the drawing board on [[byte-121-twin-int16]].
+- **`121_A` doesn't go strongly negative in coast** ⇒ signed-torque interpretation fails. Back to the drawing board on [[signal-engine-torque]].
 - **`540 D1` walks down toward coolant-baseline during coast** ⇒ reinforces "D1 is throttle+load-derived, drops toward idle baseline under no-throttle-no-load" reading. Doesn't confirm any specific interpretation but rules out "D1 is coolant-only".
 
 ## Follow-ups
 
-- If the signed-torque interpretation confirms: rewrite [[byte-121-twin-int16]] as `confirmed`, rename `signal-engine-torque` or similar, add LSB in N·m to `signals.yaml`. Update the fuel model constants in [[fuel-consumption-derivation-from-torque]] and [[project-fuel-consumption-derivation]] memory.
+- If the signed-torque interpretation confirms: rewrite [[signal-engine-torque]] as `confirmed`, rename `signal-engine-torque` or similar, add LSB in N·m to `signals.yaml`. Update the fuel model constants in [[fuel-consumption-derivation-from-torque]] and [[project-fuel-consumption-derivation]] memory.
 - If GPS was captured concurrently: independently pin the wheel-speed LSBs from status.md Next Action #1. Two experiments closed in one ride.
 - If the coast surfaces any anomalous behaviour on other bytes (moving-byte candidates that fire only under overrun, e.g. `121 D6` bits 2-7 which are 0 in normal operation), note them here and open a follow-up.

@@ -2,7 +2,7 @@
 """first_moving_ride_warmup_index_check.py — extend `540 D1` cold-walkup table.
 
 moving-1 is a fresh cold-start ride covering coolant 26 → 87 °C over ~ 5 minutes.
-The existing [[signal-warmup-index]] finding built its (coolant → D1) table
+The existing [[signal-fuel-injection-setpoint]] finding built its (coolant → D1) table
 from the 2026-06-17-engine-idle-baseline Run 1 alone (bike stationary, engine
 idling, ~ 3 minutes of warmup). This gives us a second independent walkup
 under different conditions (rider actively riding, so throttle varies) — cross-

@@ -5,7 +5,7 @@ Uses the 2026-06-23-engine-driven-rear-spin capture (engine on, paddock stand,
 RPM setpoint sweep from idle → ~5500 in 1st gear) to answer two questions in
 one pass:
 
-  Q1. Does `540` D1 (the warm-up index, [[signal-warmup-index]]) vary with RPM
+  Q1. Does `540` D1 (the warm-up index, [[signal-fuel-injection-setpoint]]) vary with RPM
       at constant coolant temperature?  Bike was at operating temp throughout
       this session, so any RPM-driven movement would discriminate the two
       remaining hypotheses (idle-bypass position vs cold-start enrichment

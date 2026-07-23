@@ -7,7 +7,7 @@ related:
     - battery-voltage-absent-from-always-on-broadcasts
     - always-on-broadcast-ids
     - byte-d7-cycle-hash
-    - byte-121-twin-int16
+    - signal-engine-torque
   decisions: []
   logs:
     - 2026-06-17-key-on-cold-boot

@@ -6,6 +6,7 @@
     --warn: #e6b06a;
     --err: #e07070;
     --accent: #f1b500;
+    --cold: #6ab0e6;
     --hair: #1a1e24;
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   }
@@ -80,6 +81,23 @@
   }
   .sig .meta .name { color: var(--dim); }
   .sig .meta .loc  { color: var(--dim); opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: auto; }
+  /* Provisional-signal marker: subtle "?" chip next to the name. Hovering
+     surfaces the finding path via title. Cell also gets a dashed left rule
+     (below) so the flag reads at a glance without adding a whole tint. */
+  .sig .meta .prov {
+    color: var(--warn);
+    font-size: 9px;
+    line-height: 1;
+    border: 1px solid var(--warn);
+    border-radius: 8px;
+    padding: 1px 4px;
+    opacity: 0.7;
+    cursor: help;
+  }
+  .sig.provisional { box-shadow: inset 2px 0 0 0 var(--warn); }
+  .sig.provisional .val { opacity: 0.92; }
+  body.ride-mode .sig[data-tier] .prov { display: none; }   /* rider surface: keep it clean */
+  body.ride-mode .sig.provisional { box-shadow: none; }
   .sig .row {
     display: flex; align-items: baseline;
     gap: 6px;
@@ -100,8 +118,16 @@
   }
   .sig .val.pulse { color: var(--accent); transition: color 0s; }
   .sig .val.stale { opacity: 0.4; }
-  .sig .val.enum-ok   { color: var(--ok); }
-  .sig .val.enum-err  { color: var(--err); }
+  .sig .val.enum-ok     { color: var(--ok); }
+  .sig .val.enum-err    { color: var(--err); }
+  .sig .val.enum-active { color: var(--accent); }
+  /* Threshold bands (uint signals). Declared after .pulse so the tint
+     persists during frame-update flashes — same source-order behaviour
+     as enum-ok / enum-err. */
+  .sig .val.band-cold   { color: var(--cold); }
+  .sig .val.band-accent { color: var(--accent); }
+  .sig .val.band-warn   { color: var(--warn); }
+  .sig .val.band-danger { color: var(--err); }
   .sig .unit {
     color: var(--dim); font-size: 11px;
     letter-spacing: 0.03em;
@@ -117,8 +143,15 @@
     opacity: 0.7;
     white-space: nowrap;
     letter-spacing: 0.03em;
-    pointer-events: none;
+    background: transparent;
+    border: none;
+    padding: 2px 4px;
+    margin: -2px -4px;
+    font-family: inherit;
+    cursor: pointer;
   }
+  .sig .peak:empty { pointer-events: none; }
+  .sig .peak:hover { color: var(--fg); opacity: 1; }
   .sig .fresh {
     position: absolute;
     left: 0; bottom: 0;
@@ -126,6 +159,15 @@
     background: var(--accent);
     width: 0%;
     transition: width 60ms linear;
+  }
+  /* Sparkline: absolute-positioned behind .val in Diagnostic mode; the
+     canvas draws its own line with global styling from --accent. */
+  .sig canvas.spark {
+    position: absolute;
+    left: 10px; right: 10px; bottom: 12px;
+    width: auto; height: 18px;
+    pointer-events: none;
+    opacity: 0.28;
   }
   /* Bootstrap state before first frame: value is a single em-dash. */
   .sig.empty .val { color: var(--dim); }
@@ -425,6 +467,9 @@
   @media (prefers-reduced-motion: reduce) {
     .sig .val, .sig .fresh { transition: none; }
     .sig .val.pulse { color: var(--fg); }
+    #warnStrip .dot { transition: none; }
+    #warnStrip .dot.hard-stale { animation: none; }
+    #captureBar .rec-dot { animation: none; }
   }
 
   /* -------------------------------------------------------------------------
@@ -543,8 +588,162 @@
   #editBar button.ghost:hover { color: var(--fg); border-color: var(--dim); }
   #editBar button.primary { border-color: var(--accent); color: var(--accent); }
 
-  /* Edit button in the capture bar: mild accent when active. */
-  #captureBar #editBtn.active { color: var(--accent); border-color: var(--accent); }
+  /* Edit / mode buttons in the capture bar: mild accent when active. */
+  #captureBar #editBtn.active,
+  #captureBar #modeBtn.active { color: var(--accent); border-color: var(--accent); }
+
+  /* Health pip — bridge-status dot shown only in Ride mode, where the
+     six-cell diagnostic header collapses. Anchored to the header so it
+     stays visible while the rest hides. */
+  #healthPip {
+    position: absolute;
+    top: calc(env(safe-area-inset-top) + 6px);
+    right: 10px;
+    width: 12px; height: 12px;
+    background: var(--dim);
+    display: none;
+    z-index: 1;
+  }
+  #healthPip.ok  { background: var(--ok); }
+  #healthPip.warn{ background: var(--warn); }
+  #healthPip.err { background: var(--err); }
+
+  /* Warning strip — one dot per discrete signal. Sits between the edit
+     bar and the decoded panel; always visible in both modes. Tap toggles
+     a labeled row so the meaning of each dot is discoverable without
+     memorisation. */
+  #warnStrip {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 10px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--hair);
+    min-height: 22px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #warnStrip .slot {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    flex: 0 0 auto;
+    min-width: 32px;
+  }
+  #warnStrip .dot {
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: var(--dim);
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,0.4);
+    transition: background 150ms linear, opacity 300ms linear, box-shadow 150ms linear;
+  }
+  #warnStrip .dot.ok     { background: var(--ok); }
+  #warnStrip .dot.err    { background: var(--err); }
+  #warnStrip .dot.active { background: var(--accent); }
+  #warnStrip .dot.stale  { opacity: 0.35; }
+  /* Provisional discretes: dashed halo around the dot. Diagnostic-mode
+     cue only; Ride mode keeps the strip clean since a rider glancing
+     down doesn't need the doc-provenance signal. */
+  #warnStrip .dot.provisional { box-shadow: 0 0 0 1px var(--warn), inset 0 0 0 1px rgba(0,0,0,0.4); }
+  body.ride-mode #warnStrip .dot.provisional { box-shadow: inset 0 0 0 1px rgba(0,0,0,0.4); }
+  #warnStrip .dot.hard-stale {
+    background: var(--err);
+    box-shadow: 0 0 0 2px var(--err), inset 0 0 0 1px rgba(0,0,0,0.4);
+    animation: warn-strobe 900ms ease-in-out infinite;
+  }
+  @keyframes warn-strobe {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.45; }
+  }
+  #warnStrip .lbl {
+    display: none;
+    font-size: 9px;
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    line-height: 1;
+    white-space: nowrap;
+  }
+  #warnStrip.expanded .lbl { display: block; }
+  #warnStrip.expanded { padding-top: 8px; padding-bottom: 8px; }
+  #warnStrip:empty { display: none; }
+
+  /* -------------------------------------------------------------------------
+     Ride mode — the phone-on-quadlock layout. Diagnostic header collapses
+     to a single health pip, per-cell dev metadata hides, only rider-relevant
+     signals remain, and heroes get 2-3x digits. Tier is set imperatively
+     in JS via [data-tier] so DOM order stays consistent with Diagnostic
+     (user's edit-mode reordering isn't re-applied here).
+     ------------------------------------------------------------------------- */
+  body.ride-mode #healthPip { display: block; }
+  body.ride-mode header .cell { display: none; }
+  body.ride-mode header {
+    grid-template-columns: 1fr;
+    min-height: 22px;
+  }
+  body.ride-mode .sig .loc { display: none; }
+  body.ride-mode .sig .meta { font-size: 9px; }
+  /* Any cell without a tier assignment is hidden in Ride. */
+  body.ride-mode main#mid > .sig:not([data-tier]) { display: none; }
+  /* Force layout order so RPM is always full-width first, then hero pair,
+     then second-tier pair — regardless of the persisted Diagnostic order. */
+  body.ride-mode main#mid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-flow: dense;
+  }
+  body.ride-mode .sig[data-tier="hero-primary"] {
+    grid-column: 1 / -1;
+    order: 1;
+  }
+  body.ride-mode .sig[data-tier="hero-speed"] { order: 2; }
+  body.ride-mode .sig[data-tier="hero"]       { order: 3; }
+  body.ride-mode .sig[data-tier="second"]     { order: 4; }
+
+  body.ride-mode .sig[data-tier="hero-primary"] .val {
+    font-size: clamp(64px, 18vw, 128px);
+    font-weight: 400;
+  }
+  body.ride-mode .sig[data-tier="hero"] .val,
+  body.ride-mode .sig[data-tier="hero-speed"] .val {
+    font-size: clamp(44px, 11vw, 80px);
+    font-weight: 400;
+  }
+  body.ride-mode .sig[data-tier="second"] .val {
+    font-size: clamp(28px, 6vw, 42px);
+  }
+  body.ride-mode .sig[data-tier] .unit {
+    font-size: 13px;
+  }
+  /* Sparkline moves out from behind the digits so it can breathe under
+     the value. Height scales with tier. */
+  body.ride-mode .sig[data-tier] canvas.spark {
+    position: static;
+    display: block;
+    width: 100%;
+    opacity: 0.55;
+    margin-top: 6px;
+  }
+  body.ride-mode .sig[data-tier="hero-primary"] canvas.spark { height: 48px; }
+  body.ride-mode .sig[data-tier="hero"]         canvas.spark { height: 32px; }
+  body.ride-mode .sig[data-tier="hero-speed"]   canvas.spark { height: 32px; }
+  body.ride-mode .sig[data-tier="second"]       canvas.spark { height: 22px; }
+  /* Landscape: give heroes a wider row and drop primary from full-width to
+     span 2 of 4, so RPM/GEAR/WHEEL_R sit side-by-side. */
+  @media (orientation: landscape) and (max-height: 500px) {
+    body.ride-mode main#mid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    body.ride-mode .sig[data-tier="hero-primary"] { grid-column: span 2; }
+    body.ride-mode .sig[data-tier="hero-primary"] .val {
+      font-size: clamp(48px, 12vh, 96px);
+    }
+    body.ride-mode .sig[data-tier="hero"] .val,
+    body.ride-mode .sig[data-tier="hero-speed"] .val {
+      font-size: clamp(36px, 9vh, 64px);
+    }
+  }
 
   @media (max-width: 420px) {
     #editBar { padding: 6px; }

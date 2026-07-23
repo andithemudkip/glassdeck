@@ -5,7 +5,7 @@ established_by:
   - 2026-07-22-first-moving-ride
 references:
   - fuel-consumption-absent-from-broadcasts
-  - byte-121-twin-int16
+  - signal-engine-torque
   - project-fuel-consumption-derivation
 ---
 
@@ -17,7 +17,7 @@ Fuel consumption is not broadcast on this bike's CAN bus ([[fuel-consumption-abs
 fuel_rate_mL_per_s ≈ k · RPM · max(0, 121_A)
 ```
 
-where `121_A` is the signed int16 channel `121 D0:D1` (leading hypothesis: engine torque, see [[byte-121-twin-int16]]). The `max(0, ...)` clip encodes the well-known ECU behaviour that fuel is cut on decel — during overrun the engine is being spun by the wheels rather than driving them, so no fuel is being injected.
+where `121_A` is the signed int16 channel `121 D0:D1` (leading hypothesis: engine torque, see [[signal-engine-torque]]). The `max(0, ...)` clip encodes the well-known ECU behaviour that fuel is cut on decel — during overrun the engine is being spun by the wheels rather than driving them, so no fuel is being injected.
 
 Working calibration constant against the 2026-07-22 ride: **k ≈ 2.83 × 10⁻⁶ mL / (RPM · LSB · s)**, anchored to the rider's 3.4 L/100km typical-riding baseline ([[project-fuel-consumption-baseline]]).
 
@@ -83,9 +83,9 @@ Rider's OEM-dash cruise numbers of 3.3-3.5 L/100km are for typical riding that i
 
 Working estimate for `f_idle`: use published Svartpilen 401 idle consumption if available; failing that, 0.3 L/hour ≈ 0.083 mL/s.
 
-## Model 3 (540 D1) doesn't work as a fuel proxy
+## Model 3 (540 D1) — earlier rejection revisited (2026-07-22)
 
-The [[signal-warmup-index]] byte's rolling-load response looked promising for a fuel-injection-quantity signal, but the integrated-ride model produces implausibly low fuel numbers at moderate load (predicts ~0.7 L/hour at 5000 RPM cruise where reality is ~2 L/hour). D1's nonlinear/saturating relationship with load means it doesn't scale like fuel injection does. Keep D1 as an "engine state" indicator, not as a fuel proxy.
+Original rejection reasoning: `(D1 - 14) × RPM` under-predicted moderate-load fuel by ~3×, so D1 was written off as a fuel proxy. The 2026-07-22 discriminator-scan follow-up ([[signal-fuel-injection-setpoint]] top note) reopens this: the `(D1 - 14) × RPM` formulation was wrong, not D1 itself. **D1 alone** (no RPM multiply, no idle subtract) integrated across the ride matches the rider's 3.4 L/100km baseline at a plausible 8.18 μL per LSB·s, predicting 0.41 L/hr idle burn, 1.6 L/hr cruise, 4.4 L/hr WOT. This makes D1 an **orthogonal fuel-rate proxy candidate**, not a replacement for the `121_A · RPM` torque model — D1's ~1 s smoothing lag makes it under-respond to transients (where the torque model shines), but its coolant-keyed nonzero idle floor removes the need for the `f_idle` term. Cross-checking one against the other is a natural firmware sanity check. Not adopted for the model — pending the key-cycle/coast-down disambiguation experiments listed in [[signal-fuel-injection-setpoint]].
 
 ## What this means for the firmware / ADR
 
@@ -104,7 +104,7 @@ Decision on adopting this is not made — write it as a proposed ADR revision wh
 
 ## Open
 
-- **Verify signed-torque interpretation** with a coast-down capture (throttle closed, RPM drops from say 5000 to idle across ~ 10 s in a fixed gear). Expected: `121_A` walks smoothly from strongly-negative back to ~ zero as engine reaches idle; no discontinuities. This is what [[byte-121-twin-int16]]'s Open list already calls out.
+- **Verify signed-torque interpretation** with a coast-down capture (throttle closed, RPM drops from say 5000 to idle across ~ 10 s in a fixed gear). Expected: `121_A` walks smoothly from strongly-negative back to ~ zero as engine reaches idle; no discontinuities. This is what [[signal-engine-torque]]'s Open list already calls out.
 - **Nail the LSB of `121_A`**. Currently no direct measurement; the "0.25 N·m/LSB gives 27 % thermal eff" argument above is suggestive but circular (assumes rider baseline is exactly 3.4 L/100km on this ride). A GPS-tracked ride with a tank-fill delta anchor would isolate the LSB.
 - **`f_idle` calibration**. Needs either a manufacturer-published number or a stopped-engine-running experiment with fuel-flow measurement. For now, 0.3 L/hour is a reasonable placeholder.
 - **Does the model handle transient WOT correctly?** During hard acceleration, `121_A` can spike briefly; the model may over-predict on those spikes if the actual injection-quantity limit trails torque demand. Only observable via tank-fill delta over rides with varying aggression.
@@ -115,4 +115,4 @@ Decision on adopting this is not made — write it as a proposed ADR revision wh
 - [`scripts/first_moving_ride_fuel_model.py`](../../../scripts/first_moving_ride_fuel_model.py) — ride-integrated calibration.
 - [`scripts/first_moving_ride_load_scan.py`](../../../scripts/first_moving_ride_load_scan.py) — earlier analysis that first surfaced `121_A` as signed-torque-shaped.
 
-See also: [[byte-121-twin-int16]] (encoding + signed-torque hypothesis), [[fuel-consumption-absent-from-broadcasts]] (why we derive rather than read), [[signal-warmup-index]] (parallel load-responsive byte that turned out not to be a good fuel proxy), [[signal-rpm]], [[project-fuel-consumption-derivation]] (memory — model plan).
+See also: [[signal-engine-torque]] (encoding + signed-torque hypothesis), [[fuel-consumption-absent-from-broadcasts]] (why we derive rather than read), [[signal-fuel-injection-setpoint]] (parallel load-responsive byte that turned out not to be a good fuel proxy), [[signal-rpm]], [[project-fuel-consumption-derivation]] (memory — model plan).

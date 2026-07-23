@@ -5,6 +5,17 @@
   // Most recent (sec.us) parsed off /stream. Anchors backfill on reconnect.
   let lastFrameTs = 0;
 
+  // Health pip — single indicator shown in Ride mode (the six-cell dev header
+  // collapses). Green = ws-open + twai-run + frames arriving between polls;
+  // amber = one of those degraded; red = fetch failed.
+  const $healthPip = document.getElementById("healthPip");
+  let lastHealthFramesSeen = null;
+  function setPip(cls, title) {
+    if (!$healthPip) return;
+    $healthPip.className = "pip " + cls;
+    $healthPip.title = title;
+  }
+
   // Matches ADR 0018's `(<sec>.<us>) ` firmware prefix. Backward-compatible:
   // an unprefixed line (older firmware, or an unprefixed test feed) falls
   // through untouched and lastFrameTs simply doesn't advance.
@@ -98,8 +109,20 @@
       const dropped = j.frames_ws_dropped || 0;
       $dropped.textContent = dropped.toLocaleString();
       $dropped.className = "v " + (dropped > 0 ? "warn" : "");
+
+      const wsOpen = ws && ws.readyState === WebSocket.OPEN;
+      const twaiRun = j.twai_state === "running";
+      const frames = j.frames_seen || 0;
+      const flowing = lastHealthFramesSeen !== null && frames > lastHealthFramesSeen;
+      lastHealthFramesSeen = frames;
+      if (wsOpen && twaiRun && flowing) setPip("ok", "ws open · twai running · frames flowing");
+      else if (wsOpen && twaiRun)       setPip("warn", "ws open · twai running · no new frames");
+      else if (wsOpen)                  setPip("warn", "ws open · twai " + (j.twai_state || "?"));
+      else                              setPip("err", "ws " + (ws ? ws.readyState : "n/a"));
     } catch (e) {
       $rssi.className = $uptime.className = $twai.className = "v mute";
+      setPip("err", "health poll failed");
+      lastHealthFramesSeen = null;
     }
   }
 

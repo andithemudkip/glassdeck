@@ -20,11 +20,23 @@
 #                  (e.g. a 12-bit value occupying the high bits of a 16-bit slot).
 #   bit_length     number of bits the signal occupies (default 8). For `bytes`,
 #                  defaults to 8*len(bytes) when the whole slot is the signal.
-#   encoding       bool | uint | enum
+#   encoding       bool | uint | sint | enum
+#                    - sint = two's-complement signed integer, sign-extended
+#                      from bit_length. Combine with `bytes` + `byte_order`
+#                      for signed multi-byte values (e.g. signed int16 BE).
 #   scale          multiplier applied to raw integer (default 1)
 #   offset         added after scale (default 0)
 #   unit           display unit string, or null
 #   values         map of raw int → label, for bool/enum rendering
+#   bands          optional; per-signal render thresholds for the live view.
+#                  Mapping with any subset of:
+#                    cold_below     value strictly below → "cold" tint
+#                    warn_above     value strictly above → "warn" tint
+#                    danger_above   value strictly above → "danger" tint
+#                    accent_above   value strictly above → "accent" tint
+#                                   (goal-hit hue, e.g. WOT — not a warning)
+#                  All numbers are in scaled/display units (post scale+offset).
+#                  Only meaningful on uint signals; rejected on bool/enum.
 #   notes          free text, optional
 
 - name: rpm
@@ -38,6 +50,9 @@
   scale: 1
   offset: 0
   unit: rpm
+  bands:
+    warn_above: 8500
+    danger_above: 9500
   notes: "Engine-off reads exact 0. Idle ~1700 RPM. Verified to ~2100 RPM; higher range untested."
 
 - name: throttle_position
@@ -50,7 +65,9 @@
   scale: 1
   offset: 0
   unit: counts
-  notes: "Full scale is 254 (not 255). Closed = 0x00. For percent, divide by 254."
+  bands:
+    accent_above: 241
+  notes: "Full scale is 254 (not 255). Closed = 0x00. For percent, divide by 254. accent_above=241 ≈ 95% throttle."
 
 - name: coolant_temp
   status: confirmed
@@ -63,11 +80,15 @@
   scale: 0.1
   offset: 0
   unit: "°C"
+  bands:
+    cold_below: 60
+    warn_above: 100
+    danger_above: 110
   notes: "Note Husqvarna shifts coolant one byte earlier than KTM 690 (D5,D6 vs D6,D7)."
 
-- name: warmup_index
+- name: fuel_injection_setpoint
   status: provisional
-  finding: signal-warmup-index
+  finding: signal-fuel-injection-setpoint
   arbitration_id: 0x540
   byte: 1
   bit_length: 8
@@ -75,7 +96,7 @@
   scale: 1
   offset: 0
   unit: index
-  notes: "Engine-on-gated, decreases with coolant temp. 0x00 engine-off; ~0x19 cold-start down to 0x0E at operating temp. Likely warm-up enrichment factor or fast-idle/bypass position."
+  notes: "ECU base fuel-injection setpoint, broadcast at 20 ms but recomputed at ~1 Hz. Post-start 3-stage enrichment shape (0 → low → peak → settled); coolant-keyed idle floor (~25 cold → ~14 warm); (grip, RPM) under drive, gear-invariant. Elevated during overrun (setpoint continues to compute while decel-fuel-cut zeros actuation), decays stepwise over 1-2s. Ride-integrated calibration ~8.18 μL·LSB⁻¹·s⁻¹ (unverified). 0x00 engine-off. Formerly warmup_index; renamed 2026-07-23 after cold-start 3-stage transient decided the interpretation."
 
 - name: kill_switch
   status: confirmed
@@ -184,6 +205,19 @@
   encoding: bool
   notes: "Semantics open. Not the ABS lamp (dropped from abs_lamp bit-set on 2026-07-22 after historical cross-check). Rises 0→1 at ~t+2s of key-on (ECU/module init handshake). Later transitions vary by session — flips in 2026-06-24 front-wheel hand-spin engine-off where the ABS lamp stayed lit, so it's carrying something else. Candidate meanings: ignition-armed / start-permission bit, kill-switch or side-stand mirror at inverted polarity, or module heartbeat. From signal-12a-d1-bit2 finding."
 
+- name: engine_torque
+  status: confirmed
+  finding: signal-engine-torque
+  arbitration_id: 0x121
+  bytes: [0, 1]
+  byte_order: big
+  bit_length: 16
+  encoding: sint
+  scale: 1
+  offset: 0
+  unit: LSB
+  notes: "Signed engine torque, int16 BE at D0:D1. Encoding at 100% sign-byte agreement across 35k+ engine-on frames. Signed torque interpretation confirmed 2026-07-23 by four independent tests: sign-flip drive/overrun, 130-LSB collapse during aggressive quickshifter ignition cut, physics-based LSB consistency ~0.13-0.22 N·m across cruise segments, and twin-channel redundancy with D2:D3 (safety-critical torque-monitor pattern). Working LSB ~0.25 N·m (peak ~37 N·m per spec). Fuel rate is derivable as k·RPM·max(0, engine_torque); see fuel-consumption-derivation-from-torque.md. D2:D3 is the redundant channel — not exposed separately."
+
 - name: shift_cut_active
   status: provisional
   finding: signal-quickshifter
@@ -257,7 +291,7 @@
   bit_length: 1
   encoding: bool
   values:
-    0: OFF
+    0: "OFF"
     1: LIT
   notes: "ABS warning lamp. HIGH = lit (key-on default), LOW = extinguished (self-test complete). Extinguishes at first front-wheel > 6 km/h crossing with engine running, on each fresh key-on cycle. Redundantly broadcast at 12A D1 bit 0, 12A D5 bit 3 (all same polarity), and inverted at 12E D6 bits 4 and 5 (LOW = lit). All 5 agree; use any one as source of truth. NOTE: 12A D1 bit 2 was included in an earlier draft but demoted after historical cross-check — see signal-12a-d1-bit2. From 2026-07-22-first-moving-ride."
 

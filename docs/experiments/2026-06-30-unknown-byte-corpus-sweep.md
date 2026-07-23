@@ -6,7 +6,7 @@ related:
   findings:
     - always-on-broadcast-ids
     - byte-d7-cycle-hash
-    - byte-121-twin-int16
+    - signal-engine-torque
     - byte-encoding-12-in-16
     - engine-state-bits-decay-shape
     - signal-12d-d1-bit0
@@ -78,7 +78,7 @@ D7 is excluded on the 9 IDs where the cycle-hash model is closed ([[byte-d7-cycl
    - `coolant_temp` (idle-x3 only — the three runs span cold/warm/hot)
    - `wheel_speed_front` and `wheel_speed_rear` (engine-driven rear-spin + front-wheel hand-spin)
    - `engine_on_counter` (engine-on windows; modular unwrap before correlating)
-   - `RPM × throttle` (load proxy — see [[byte-121-twin-int16]] open questions)
+   - `RPM × throttle` (load proxy — see [[signal-engine-torque]] open questions)
    - Time-since-engine-on (engine-on windows) — to surface monotonic state.
 
    A byte with `|r| ≥ 0.9` to any known channel is **EXPLAINED-BY**. Lower r values are kept verbatim — manual review is cheaper than an arbitrary threshold for the borderline cases.
@@ -129,7 +129,7 @@ Notable bucket assignments:
 - **`12D` D4 → EXPLAINED-BY `wheel_front`** at r = +0.9985 in `2026-06-24-front-wheel-decay-mark` and r = +0.9978 in `2026-06-24-front-wheel-hand-spin`. Two independent captures, both engine-off, both near-perfect correlation. `12D` D4 is a front-wheel-speed-derived broadcast — distinct byte position from the known `12D` D0:D1 12-bit field, so this is a *new* speed channel (probably the same value at a different scale, similar to how `12D` D2 is the coarse rear-speed mirror).
 - **`541` D6 → UNEXPLAINED-ACTIVE, moves in 14/14 sessions** — the most active byte in the corpus. Already informally noted as the "key-on ramp counter" in side-comments on `scripts/battery_voltage_scan.py`; this sweep elevates it to a first-class target. Not strongly correlated with any decoded reference (best r = +0.504 vs `wheel_front`).
 - **`12A` D1 → UNEXPLAINED-ACTIVE, moves in 13/14 sessions** but only 2 distinct values in the corpus union — a single-bit-shaped flag on a 50 ms-period ID that nothing in `signals.yaml` explains. Strong candidate for a per-input correlation walk.
-- **`121` D0–D3** all UNEXPLAINED-ACTIVE — confirms the twin int16 finding ([[byte-121-twin-int16]]) is the right frame, and the channels themselves remain semantically open. Best r values are `D1` and `D0` ≈ +0.80 vs throttle (from the throttle-sweep session — both channels' low bytes move with throttle even engine-off; D0 movement is the sign-extension from D1 dipping negative).
+- **`121` D0–D3** all UNEXPLAINED-ACTIVE — confirms the twin int16 finding ([[signal-engine-torque]]) is the right frame, and the channels themselves remain semantically open. Best r values are `D1` and `D0` ≈ +0.80 vs throttle (from the throttle-sweep session — both channels' low bytes move with throttle even engine-off; D0 movement is the sign-extension from D1 dipping negative).
 - **Three "untouched" IDs each have exactly one moving byte**: `12A` D1, `12E` D6, `5A0` D4. Every other byte on each of these IDs is GLOBAL-STATIC. Tightens the bike-side experiment plan: chase one byte per ID instead of all eight.
 
 Sub-check results:
@@ -150,7 +150,7 @@ Outputs:
 - **`12D` D4 is a real, decode-able signal.** Two engine-off sessions independently land r ≥ 0.998 against decoded front wheel speed. Next: write a finding once the encoding (offset / scale / wrap behaviour) is characterised — this needs a script-level look at the byte values vs decoded wheel_front, not another capture.
 - **The three untouched IDs collapse from 21 unknown bytes to 3 unknown bytes.** Six of the seven bytes on each of `12A`, `12E`, `5A0` are GLOBAL-STATIC across every condition we've exercised. Future bike-side experiments don't need to "decode 12A" — they need to decode `12A` D1, `12E` D6, `5A0` D4. That's a 7× narrower target list than the coverage matrix suggested.
 - **GLOBAL-STATIC ≠ reserved.** Forty-six bytes read a single value across 14 sessions and ~800k frames. Some are genuinely reserved (the D7 exceptions, the bits-1-3 reserved zeros). Others are latent — likely waiting on inputs we haven't exercised (ABS active, indicator stalk, indicator stalk + brake, fault states, fuel low, mode button, ambient sensor delta). The list of GLOBAL-STATIC bytes is now a *checklist* for the next bike-side session: each novel input should be specifically watched against it.
-- **The `121` twin int16 channels are not MAP and not load-driven.** Best engine-on r vs RPM × throttle is ≈ +0.31. The original [[byte-121-twin-int16]] write-up already ruled out drivetrain load via the rear-spin Phase A test; the corpus-wide correlation pass corroborates that ruling on a much broader basis. The remaining candidates are lambda short-term trim, ignition advance correction, or a fuel-table correction term — all of which would respond to fine RPM/throttle excursions rather than coarse setpoints. Discriminating among them requires a slow throttle-sweep at fixed RPM in a future engine-on capture.
+- **The `121` twin int16 channels are not MAP and not load-driven.** Best engine-on r vs RPM × throttle is ≈ +0.31. The original [[signal-engine-torque]] write-up already ruled out drivetrain load via the rear-spin Phase A test; the corpus-wide correlation pass corroborates that ruling on a much broader basis. The remaining candidates are lambda short-term trim, ignition advance correction, or a fuel-table correction term — all of which would respond to fine RPM/throttle excursions rather than coarse setpoints. Discriminating among them requires a slow throttle-sweep at fixed RPM in a future engine-on capture.
 - **Limitations the sweep can't bypass.** 100 ms bucket aggregation will blur fast transients (anything < 100 ms — including, plausibly, parts of the `121` int16 channels' engine-on wobble). For bytes that move only during input edges (e.g. a one-frame flag on an indicator press), the correlation pass will under-detect. The cardinality + per-session-moves stats catch these but the r-based bucketing doesn't.
 
 ## Follow-ups

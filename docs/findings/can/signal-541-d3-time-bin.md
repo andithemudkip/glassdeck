@@ -69,4 +69,4 @@ The 3-state observation is a **lower bound** — longer rides would exercise D3 
 - [[2026-07-22-first-moving-ride]] — moving-1 and moving-3 provided the two transitions; moving-2/4/5 provided the plateau boundaries.
 - One-liner byte-transition analysis embedded in the whole-corpus sweep of remaining `?` bytes.
 
-See also: [[signal-warmup-index]] (`540` D1 — the parallel warmup-related byte, throttle+load-derived; also engine-on-gated), [[signal-engine-on-counter]] (`541` D4 — the *continuous* second-resolution engine-on counter, contrast to this coarse 5-min-bin byte).
+See also: [[signal-fuel-injection-setpoint]] (`540` D1 — the parallel warmup-related byte, throttle+load-derived; also engine-on-gated), [[signal-engine-on-counter]] (`541` D4 — the *continuous* second-resolution engine-on counter, contrast to this coarse 5-min-bin byte).

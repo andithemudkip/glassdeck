@@ -23,7 +23,7 @@ fully_explained_bytes:
   - { id: 0x12D, byte: 7, label: 'hash: D7 cycle hash' }
   - { id: 0x12E, byte: 7, label: 'hash: D7 cycle hash' }
   - { id: 0x450, byte: 7, label: 'static-zero: D7 always 0x00 (byte-d7-cycle-hash exception)' }
-  - { id: 0x540, byte: 1, label: 'warmup_index' }
+  - { id: 0x540, byte: 1, label: 'fuel_injection_setpoint' }
   - { id: 0x540, byte: 5, label: 'coolant_temp' }
   - { id: 0x540, byte: 6, label: 'coolant_temp' }
   - { id: 0x540, byte: 7, label: 'static-zero: D7 always 0x00 (byte-d7-cycle-hash exception)' }

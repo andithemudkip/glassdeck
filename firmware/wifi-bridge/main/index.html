@@ -18,6 +18,7 @@
   <div class="cell"><span class="k">frames seen</span><span class="v" id="seen">0</span></div>
   <div class="cell"><span class="k">ws dropped</span><span class="v" id="dropped">0</span></div>
   <div id="liveness"></div>
+  <div id="healthPip" class="pip" title="bridge health"></div>
 </header>
 
 <div id="a2hsHint">
@@ -39,6 +40,7 @@
   <span class="spacer"></span>
   <button id="filesBtn" class="ghost" type="button" hidden>Files</button>
   <button id="exportBtn" type="button" hidden>Export</button>
+  <button id="modeBtn" class="ghost" type="button" title="Toggle Ride/Diagnostic layout">Ride</button>
   <button id="editBtn" class="ghost" type="button" title="Customize live view">Edit</button>
 </div>
 
@@ -49,6 +51,8 @@
   <button id="resetLayoutBtn" class="ghost" type="button">Reset</button>
   <button id="editDoneBtn" class="primary" type="button">Done</button>
 </div>
+
+<div id="warnStrip" role="group" aria-label="Discrete signal warnings"></div>
 
 <main id="mid"></main>
 

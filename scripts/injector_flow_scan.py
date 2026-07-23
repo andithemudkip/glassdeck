@@ -4,7 +4,7 @@
 Background: `engine_load_scan.py` ranks bytes by |r vs RPM·throttle| using only
 the 5 rear-spin setpoints (B1..B5). On that drag curve RPM and throttle are
 nearly linearly related, so RPM, throttle, and RPM·throttle are collinear and
-no clean fuel candidate emerged. The strongest non-fuel hit was the [[byte-121-twin-int16]]
+no clean fuel candidate emerged. The strongest non-fuel hit was the [[signal-engine-torque]]
 advance/trim channels.
 
 This scan adds three things `engine_load_scan.py` doesn't do:

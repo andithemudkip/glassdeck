@@ -8,7 +8,7 @@
   // Any signal in the codegen output that isn't listed here appears after.
   const DISPLAY_ORDER = [
     "rpm", "gear_position", "wheel_speed_rear", "wheel_speed_front",
-    "throttle_position", "coolant_temp", "warmup_index",
+    "throttle_position", "engine_torque", "coolant_temp", "fuel_injection_setpoint",
     "kill_switch", "side_stand", "abs_lamp",
     "clutch", "shift_cut_active", "shift_blip_active", "shift_failed",
     "engine_on_counter", "engine_off_counter",
@@ -16,11 +16,12 @@
   const LABEL = {
     rpm: "RPM",
     gear_position: "GEAR",
-    wheel_speed_rear: "WHEEL R",
+    wheel_speed_rear: "SPEED",
     wheel_speed_front: "WHEEL F",
     throttle_position: "THROTTLE",
+    engine_torque: "TORQUE",
     coolant_temp: "COOLANT",
-    warmup_index: "WARMUP",
+    fuel_injection_setpoint: "FUEL SP",
     kill_switch: "KILL",
     side_stand: "STAND",
     abs_lamp: "ABS",
@@ -34,9 +35,27 @@
     time_bin_541_d3: "541 BIN",
     signal_12a_d1_bit2: "12A.D1.2",
   };
-  // Which enum/bool value is the "OK" polarity (green vs red).
-  const OK_VALUES = new Set(["RUN", "UP", "RELEASED"]);
-  const ERR_VALUES = new Set(["STOP", "DOWN", "PULLED"]);
+  // Discrete label → colour polarity. OK = green (nominal steady state), ERR
+  // = red (warning / fault), ACTIVE = amber (transient event, no fault —
+  // e.g. quickshifter cutting ignition mid-shift is normal, not a warning).
+  // Case-sensitive; matches the exact strings in signals.yaml `values:`.
+  //
+  // Note the deliberate asymmetry between "OFF" (abs_lamp, uppercase) → OK
+  // and "off" (shift_cut/blip, lowercase) → NOT ok. `abs_lamp OFF` is an
+  // actively-verified-good state ("self-test passed"). QS `off` is just "not
+  // currently firing" — an event-only signal is at rest most of the time,
+  // and painting that green makes the amber flash it produces harder to
+  // spot against a wall of steady green dots.
+  const OK_VALUES     = new Set(["RUN", "UP", "RELEASED", "OFF"]);
+  const ERR_VALUES    = new Set(["STOP", "DOWN", "PULLED", "LIT", "FAILED"]);
+  const ACTIVE_VALUES = new Set(["cut", "blip"]);
+  // How long to hold a transient "active" or "err" flash for visibility.
+  // QS cuts run 20–200 ms; shift_failed is a rare 1.5-s-latency FAILED
+  // pulse. 300 ms is long enough to catch a single event at a glance,
+  // short enough that back-to-back downshifts don't smear into one flash.
+  // Latching signals (ABS LIT, KILL STOP) re-trigger every broadcast so
+  // the hold is transparent on them.
+  const HOLD_MS = 300;
 
   // Compact location: "120 D0:D1" style. Dev-instrument diagnostic —
   // must fit in the meta row without ellipsis on the smallest supported
@@ -58,11 +77,13 @@
   }
 
   // Port of scripts/signals.py Signal._extract_raw. Returns int (raw) or null.
+  // For enc == "sint", two's-complement sign-extends before returning.
   function extractRaw(sig, data) {
+    let value;
     if (sig.bytes) {
       for (const b of sig.bytes) if (b >= data.length) return null;
       const order = sig.order === "big" ? sig.bytes : sig.bytes.slice().reverse();
-      let value = 0;
+      value = 0;
       for (const b of order) value = (value << 8) | data[b];
       const fullSlot = sig.bit_length === 8 * sig.bytes.length;
       if (!fullSlot || sig.bit_offset !== 0) {
@@ -70,12 +91,24 @@
         // >>> 0 for correct behavior with 16-bit+ values on the boundary
         // where <<16 would go negative in JS's signed 32-bit int semantics.
         value = ((value >>> sig.bit_offset) & mask) >>> 0;
+      } else {
+        // Full-slot uint16+: coerce back to unsigned in case the shift chain
+        // produced a negative int (JS bitwise ops are signed 32-bit).
+        value = value >>> 0;
       }
-      return value;
+    } else {
+      if (sig.byte >= data.length) return null;
+      const mask = (1 << sig.bit_length) - 1;
+      value = (data[sig.byte] >> sig.bit_offset) & mask;
     }
-    if (sig.byte >= data.length) return null;
-    const mask = (1 << sig.bit_length) - 1;
-    return (data[sig.byte] >> sig.bit_offset) & mask;
+    if (sig.enc === "sint") {
+      // Two's-complement sign-extend. 2**N instead of (1 << N) so this stays
+      // correct past 31 bits — JS bitshifts operate on 32-bit signed ints.
+      const range = 2 ** sig.bit_length;
+      const signBit = range / 2;
+      if (value >= signBit) value -= range;
+    }
+    return value;
   }
 
   function scaled(sig, raw) {
@@ -96,6 +129,21 @@
     return sig.enc === "bool" || sig.enc === "enum";
   }
 
+  const HISTORY_LEN = 60;
+
+  // Pick which band tint applies to a scaled value. Priority: danger > warn
+  // > cold > accent > null. `accent_above` is a goal-hit hue (WOT), not a
+  // warning — dropped below warn so it never masks an over-limit reading.
+  function pickBand(sig, scaledValue) {
+    const b = sig.bands;
+    if (!b) return null;
+    if (b.danger_above !== undefined && scaledValue > b.danger_above) return "danger";
+    if (b.warn_above   !== undefined && scaledValue > b.warn_above)   return "warn";
+    if (b.cold_below   !== undefined && scaledValue < b.cold_below)   return "cold";
+    if (b.accent_above !== undefined && scaledValue > b.accent_above) return "accent";
+    return null;
+  }
+
   // Build DOM + per-signal state.
   const byArb = new Map();
   const state = new Map();
@@ -113,6 +161,14 @@
     const nameEl = document.createElement("span");
     nameEl.className = "name";
     nameEl.textContent = LABEL[sig.name] ?? sig.name;
+    let provEl = null;
+    if (sig.status && sig.status !== "confirmed") {
+      div.classList.add("provisional");
+      provEl = document.createElement("span");
+      provEl.className = "prov";
+      provEl.textContent = "?";
+      provEl.title = "Provisional — decoding not fully verified (see docs/findings/can/" + sig.name.replace(/_/g, "-") + ".md)";
+    }
     const locEl = document.createElement("span");
     locEl.className = "loc";
     locEl.textContent = locStr(sig);
@@ -124,6 +180,7 @@
     hideBtn.textContent = "×";
     meta.appendChild(grip);
     meta.appendChild(nameEl);
+    if (provEl) meta.appendChild(provEl);
     meta.appendChild(locEl);
     meta.appendChild(hideBtn);
     const row = document.createElement("div");
@@ -138,14 +195,26 @@
       unit.textContent = sig.unit;
       row.appendChild(unit);
     }
-    const peak = document.createElement("span");
+    const peak = document.createElement("button");
     peak.className = "peak";
+    peak.type = "button";
+    peak.title = "Reset peak";
     peak.textContent = "";
     row.appendChild(peak);
     const fresh = document.createElement("div");
     fresh.className = "fresh";
     div.appendChild(meta); div.appendChild(row); div.appendChild(fresh);
-    return { div, val, peak, fresh, grip, hideBtn };
+    // Sparkline canvas: scalars only. The CSS positions it (behind .val in
+    // Diagnostic, below the row in Ride) so nothing here cares about layout.
+    let canvas = null, ctx = null;
+    if (!isDiscrete(sig)) {
+      canvas = document.createElement("canvas");
+      canvas.className = "spark";
+      canvas.width = 240; canvas.height = 40;   // CSS scales; keep backing store crisp.
+      div.appendChild(canvas);
+      ctx = canvas.getContext("2d");
+    }
+    return { div, val, peak, fresh, grip, hideBtn, canvas, ctx };
   }
 
   // Default order (codegen + hardcoded priority) — used on first load and Reset.
@@ -181,6 +250,12 @@
       lastUpdate: 0,       // performance.now() timestamp
       peakRaw: null,       // max raw value seen, null for discrete
       pulseUntil: 0,
+      // Sparkline ring buffer — scalars only; unused for discretes.
+      history: isDiscrete(sig) ? null : new Float32Array(HISTORY_LEN),
+      histIdx: 0,
+      histFilled: 0,
+      histMin: Infinity, histMax: -Infinity, histDirty: false,
+      currentBand: null,   // "cold" | "accent" | "warn" | "danger" | null
     });
     if (!byArb.has(sig.arb)) byArb.set(sig.arb, []);
     byArb.get(sig.arb).push(sig);
@@ -237,21 +312,42 @@
       // Enum/bool color polarity.
       if (isDiscrete(sig) && sig.values) {
         const label = sig.values[String(raw)];
-        st.nodes.val.classList.toggle("enum-ok", OK_VALUES.has(label));
-        st.nodes.val.classList.toggle("enum-err", ERR_VALUES.has(label));
+        st.nodes.val.classList.toggle("enum-ok",     OK_VALUES.has(label));
+        st.nodes.val.classList.toggle("enum-err",    ERR_VALUES.has(label));
+        st.nodes.val.classList.toggle("enum-active", ACTIVE_VALUES.has(label));
       }
-      // Peak (scalars only).
+      // Scalars: sparkline ring buffer, threshold band, peak.
       if (!isDiscrete(sig)) {
+        const v = scaled(sig, raw);
+        st.history[st.histIdx] = v;
+        st.histIdx = (st.histIdx + 1) % HISTORY_LEN;
+        if (st.histFilled < HISTORY_LEN) st.histFilled++;
+        st.histDirty = true;
+
+        const band = pickBand(sig, v);
+        if (band !== st.currentBand) {
+          // Clear the four possibilities and re-apply the active one; only
+          // paying the classList cost on transitions keeps this cheap under
+          // 100 Hz signals.
+          const cls = st.nodes.val.classList;
+          cls.remove("band-cold", "band-accent", "band-warn", "band-danger");
+          if (band) cls.add("band-" + band);
+          st.currentBand = band;
+        }
+
         if (st.peakRaw === null || raw > st.peakRaw) {
           st.peakRaw = raw;
           const peakStr = formatValue(sig, raw);
           st.nodes.peak.textContent = "▲ " + peakStr;
         }
       }
+      // Discrete → warning-strip dot; declared later in this module.
+      if (isDiscrete(sig)) updateWarnDot(sig, raw, now);
     }
   }
 
-  // Shared RAF tick: pulse decay + freshness bar + stale fade.
+  // Shared RAF tick: pulse decay + freshness bar + stale fade + sparkline
+  // redraw + warn-strip stale.
   function panelTick() {
     const now = performance.now();
     for (const st of state.values()) {
@@ -271,8 +367,165 @@
         st.nodes.fresh.style.width = pct.toFixed(1) + "%";
         st.nodes.val.classList.remove("stale");
       }
+      // Sparkline: redraw only when new data landed and the cell is visible.
+      // getBoundingClientRect gate would be more precise but costs a
+      // reflow — the .hidden class check catches the common cases (Edit
+      // hides + Ride-mode data-tier hides).
+      if (st.histDirty && st.nodes.canvas && !st.nodes.div.classList.contains("hidden")) {
+        drawSpark(st);
+        st.histDirty = false;
+      }
     }
+    tickWarnStrip(now);
     requestAnimationFrame(panelTick);
+  }
+
+  function drawSpark(st) {
+    const { canvas, ctx } = st.nodes;
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    if (st.histFilled < 2) return;
+    // Recompute min/max over the filled window each frame. Cheap for
+    // HISTORY_LEN=60; avoids drift from an incremental tracker on evict.
+    let min = Infinity, max = -Infinity;
+    for (let i = 0; i < st.histFilled; i++) {
+      const v = st.history[i];
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    if (min === max) {
+      // Flat line — render as a mid-height stroke so the cell doesn't blink
+      // between "empty" and "signal present".
+      ctx.strokeStyle = "#f1b500";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, h / 2);
+      ctx.lineTo(w, h / 2);
+      ctx.stroke();
+      return;
+    }
+    const range = max - min;
+    const pad = 2;
+    const usableH = h - 2 * pad;
+    const start = st.histFilled === HISTORY_LEN ? st.histIdx : 0;
+    const step = w / (st.histFilled - 1);
+    ctx.strokeStyle = "#f1b500";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i < st.histFilled; i++) {
+      const idx = (start + i) % HISTORY_LEN;
+      const v = st.history[idx];
+      const x = i * step;
+      const y = pad + usableH - ((v - min) / range) * usableH;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Warning strip — one dot per discrete signal, shown above the decoded grid.
+  // Piggy-backs on routeFrame (via updateWarnDot) for value → colour, and on
+  // panelTick (via tickWarnStrip) for stale-fade + hard-stale outline. SAFETY
+  // signals go hard-stale on staleness because "we haven't heard from ABS in
+  // 5s" is louder than any specific value it might carry.
+  // ---------------------------------------------------------------------------
+  const $warnStrip = document.getElementById("warnStrip");
+  const SAFETY = new Set(["abs_lamp", "kill_switch", "side_stand", "clutch"]);
+  // Discretes to expose on the strip, in visual order. Anything discrete in
+  // SIGNALS but not listed here is silently absent — intentional: strip is
+  // rider-glance surface, not a debug enumeration.
+  const STRIP_ORDER = [
+    "kill_switch", "side_stand", "abs_lamp", "clutch",
+    "shift_cut_active", "shift_blip_active", "shift_failed",
+  ];
+  const warnDots = new Map();  // name → { dot, slot, lastUpdate }
+
+  (function buildWarnStrip() {
+    for (const name of STRIP_ORDER) {
+      const sig = bySigName.get(name);
+      if (!sig || !isDiscrete(sig)) continue;
+      const slot = document.createElement("div");
+      slot.className = "slot";
+      slot.dataset.name = name;
+      slot.title = LABEL[name] ?? name;
+      const dot = document.createElement("div");
+      dot.className = "dot";
+      if (sig.status && sig.status !== "confirmed") dot.classList.add("provisional");
+      const lbl = document.createElement("div");
+      lbl.className = "lbl";
+      lbl.textContent = LABEL[name] ?? name;
+      slot.appendChild(dot);
+      slot.appendChild(lbl);
+      $warnStrip.appendChild(slot);
+      warnDots.set(name, { dot, slot, lastUpdate: 0 });
+    }
+  })();
+
+  $warnStrip.addEventListener("click", () => {
+    $warnStrip.classList.toggle("expanded");
+  });
+
+  function updateWarnDot(sig, raw, now) {
+    const rec = warnDots.get(sig.name);
+    if (!rec) return;
+    rec.lastUpdate = now;
+    const label = sig.values ? sig.values[String(raw)] : null;
+    // Compute this frame's target polarity (may be null).
+    let polarity = null;
+    if      (label && OK_VALUES.has(label))     polarity = "ok";
+    else if (label && ERR_VALUES.has(label))    polarity = "err";
+    else if (label && ACTIVE_VALUES.has(label)) polarity = "active";
+    // Signals without a values map (e.g. signal_12a_d1_bit2) fall through:
+    // truthy raw → amber (transient), no wrong-signal red on unknown labels.
+    else if (!label && raw)                     polarity = "active";
+    rec.polarity = polarity;
+    // Hold transient reds and ambers so a single-frame event stays visible.
+    // "ok" doesn't need a hold — its interesting event is the transition
+    // *out* of ok, which is what err/active capture.
+    if (polarity === "active" || polarity === "err") {
+      rec.holdClass = polarity;
+      rec.holdUntil = now + HOLD_MS;
+    }
+    applyDotPolarity(rec, now);
+  }
+
+  // Apply the effective polarity: if we're still inside a hold window,
+  // keep showing the held class even after the underlying signal reverted.
+  // Stale/hard-stale are managed by tickWarnStrip; only touch the polarity
+  // classes here.
+  function applyDotPolarity(rec, now) {
+    const holding = rec.holdUntil && rec.holdUntil > now;
+    const effective = holding ? rec.holdClass : rec.polarity;
+    const cls = rec.dot.classList;
+    cls.remove("ok", "err", "active");
+    if (effective) cls.add(effective);
+  }
+
+  function tickWarnStrip(now) {
+    for (const [name, rec] of warnDots) {
+      const dt = now - rec.lastUpdate;
+      const cls = rec.dot.classList;
+      // Decay expired hold: if the underlying frame reverted but we were
+      // still holding the transient class, drop back to the current polarity.
+      if (rec.holdUntil && now > rec.holdUntil && rec.polarity !== rec.holdClass) {
+        applyDotPolarity(rec, now);
+      }
+      if (rec.lastUpdate === 0) {
+        // Never seen — dim, no hard-stale yet (nothing lost since boot).
+        cls.add("stale");
+        cls.remove("hard-stale");
+      } else if (dt >= STALE_MS) {
+        if (SAFETY.has(name)) {
+          cls.add("hard-stale");
+          cls.remove("stale");
+        } else {
+          cls.add("stale");
+          cls.remove("hard-stale");
+        }
+      } else {
+        cls.remove("stale", "hard-stale");
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -369,6 +622,21 @@
     hideSignal(cell.dataset.name);
   });
 
+  // Peak reset: tap the ▲ chip to clear the accumulated max for that signal.
+  // Works in any mode (not gated on edit-mode) — the peak persists for the
+  // whole page lifetime otherwise, useful to zero after warmup / an anomaly.
+  $mid.addEventListener("click", (e) => {
+    const btn = e.target.closest(".peak");
+    if (!btn) return;
+    const cell = btn.closest(".sig");
+    if (!cell) return;
+    const st = state.get(cell.dataset.name);
+    if (!st) return;
+    st.peakRaw = null;
+    st.nodes.peak.textContent = "";
+    e.stopPropagation();
+  });
+
   // Pointer-drag reorder. Delegated on $mid so cells created later still work.
   let drag = null;
   $mid.addEventListener("pointerdown", (e) => {
@@ -420,3 +688,47 @@
   }
   $mid.addEventListener("pointerup", endDrag);
   $mid.addEventListener("pointercancel", endDrag);
+
+  // ---------------------------------------------------------------------------
+  // Ride / Diagnostic mode. Diagnostic (default) is the historical layout —
+  // everything visible, dev metadata shown. Ride tags a small set of cells
+  // with data-tier; CSS handles the rest (hides untagged cells, resizes
+  // heroes, reroutes the sparkline out from behind the digits).
+  // ---------------------------------------------------------------------------
+  const RIDE_TIERS = {
+    rpm: "hero-primary",
+    wheel_speed_rear: "hero-speed",   // ordered before gear via CSS `order:`
+    gear_position: "hero",
+    throttle_position: "second",
+    coolant_temp: "second",
+  };
+  const $modeBtn = document.getElementById("modeBtn");
+
+  function applyModeTiers(mode) {
+    for (const [name, st] of state) {
+      if (mode === "ride") {
+        const tier = RIDE_TIERS[name];
+        if (tier) st.nodes.div.dataset.tier = tier;
+        else delete st.nodes.div.dataset.tier;
+      } else {
+        delete st.nodes.div.dataset.tier;
+      }
+      // Force one sparkline redraw next tick so the new canvas dimensions
+      // (CSS-driven) render immediately instead of at the next data frame.
+      st.histDirty = true;
+    }
+  }
+
+  function setMode(mode) {
+    if (!VALID_MODES.has(mode)) mode = "diag";
+    livePrefs.mode = mode;
+    savePrefs();
+    document.body.classList.toggle("ride-mode", mode === "ride");
+    $modeBtn.classList.toggle("active", mode === "ride");
+    $modeBtn.textContent = mode === "ride" ? "Diag" : "Ride";
+    applyModeTiers(mode);
+  }
+
+  // VALID_MODES is declared in prefs.js (same IIFE); reused here.
+  $modeBtn.addEventListener("click", () => setMode(livePrefs.mode === "ride" ? "diag" : "ride"));
+  setMode(livePrefs.mode);

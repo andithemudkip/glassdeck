@@ -177,7 +177,7 @@ The toggle count halves cleanly bit-by-bit from bit 0 to bit 6 — the classic s
 540 1:4  SESSION-CONTRAST       only idle-1+2 active
 ```
 
-Bit 0 toggles uniformly across all 3 idle runs (~80 toggles), but **bit 1 toggles fall as coolant rises** (80 cold → 63 warm → 8 op-temp) and **bits 2-4 stop toggling entirely by Run 3**. Exactly what a coolant-binned encoding would do: the high bits flip during warm-up and stabilise at operating temperature; the low bits keep flipping with noise/jitter. Independent corroboration that [[signal-warmup-index]] (originally surfaced here as `coolant_derived` and later reinterpreted, see that finding for the rewrite) is real and not coincidence.
+Bit 0 toggles uniformly across all 3 idle runs (~80 toggles), but **bit 1 toggles fall as coolant rises** (80 cold → 63 warm → 8 op-temp) and **bits 2-4 stop toggling entirely by Run 3**. Exactly what a coolant-binned encoding would do: the high bits flip during warm-up and stabilise at operating temperature; the low bits keep flipping with noise/jitter. Independent corroboration that [[signal-fuel-injection-setpoint]] (originally surfaced here as `coolant_derived` and later reinterpreted, see that finding for the rewrite) is real and not coincidence.
 
 ### Refined or already-known structural patterns
 
@@ -211,7 +211,7 @@ What this **does not** establish:
 
 - ✅ Promote `5B0` D0 bit 4 to a `provisional` finding (second kill-state broadcast location).
 - ✅ Add `121` D5 bit 2 to the kill-finding's secondary-locations note.
-- ✅ Update [[signal-warmup-index]] (then named `signal-coolant-derived`) with the bit-level corroboration.
+- ✅ Update [[signal-fuel-injection-setpoint]] (then named `signal-coolant-derived`) with the bit-level corroboration.
 - ✅ Update [[engine-state-bits-decay-shape]] with the methodology note that idle-window bit-level scanning misses engine-start/stop-only bits — the byte-level cross-session table remains authoritative for those.
 - New `provisional` finding for `541` D4 as a candidate engine-on counter.
 - Engine-on capture remains the right next session — confirms `541` D4 rate, validates `540` D1 across more thermal points, and exercises gears 2-6 + clutch + mode toggle.

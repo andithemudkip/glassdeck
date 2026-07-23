@@ -30,8 +30,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SCHEMA_PATH = REPO_ROOT / "docs" / "signals" / "signals.yaml"
 
 VALID_STATUS = {"confirmed", "provisional", "partial"}
-VALID_ENCODING = {"bool", "uint", "enum"}
+VALID_ENCODING = {"bool", "uint", "sint", "enum"}
 VALID_BYTE_ORDER = {"big", "little"}
+VALID_BAND_KEYS = {"cold_below", "warn_above", "danger_above", "accent_above"}
 
 
 class SchemaError(ValueError):
@@ -57,6 +58,7 @@ class Signal:
     offset: float = 0.0
     unit: str | None = None
     values: dict[int, str] = field(default_factory=dict)
+    bands: dict[str, float] = field(default_factory=dict)
     notes: str = ""
 
     @property
@@ -78,7 +80,7 @@ class Signal:
             return None
         if self.encoding in ("bool", "enum") and self.values:
             return self.values.get(raw, raw)
-        if self.encoding == "uint":
+        if self.encoding in ("uint", "sint"):
             if self.scale != 1.0 or self.offset != 0.0:
                 return raw * self.scale + self.offset
             return raw
@@ -96,12 +98,22 @@ class Signal:
             if self.bit_offset != 0 or self.bit_length != 8 * len(self.bytes_):
                 mask = (1 << self.bit_length) - 1
                 value = (value >> self.bit_offset) & mask
-            return value
+            return self._sign_extend(value)
         assert self.byte is not None
         if self.byte >= len(data):
             return None
         mask = (1 << self.bit_length) - 1
-        return (data[self.byte] >> self.bit_offset) & mask
+        value = (data[self.byte] >> self.bit_offset) & mask
+        return self._sign_extend(value)
+
+    def _sign_extend(self, raw: int) -> int:
+        """Two's-complement sign-extend when encoding=='sint'. Uint stays as-is."""
+        if self.encoding != "sint":
+            return raw
+        sign_bit = 1 << (self.bit_length - 1)
+        if raw & sign_bit:
+            return raw - (1 << self.bit_length)
+        return raw
 
     def format(self, value: int | float | str | None) -> str:
         """Render a decoded value for display. Adds unit suffix if set."""
@@ -232,7 +244,32 @@ def _parse_entry(entry: dict) -> Signal:
     values_raw = entry.get("values") or {}
     if not isinstance(values_raw, dict):
         raise SchemaError("`values` must be a mapping")
+    # Guard YAML 1.1 boolean coercion: unquoted OFF/ON/YES/NO/TRUE/FALSE get
+    # parsed as Python bool, then str() would silently produce "False"/"True".
+    # We already had abs_lamp bite us this way (2026-07-23) — hard-fail so the
+    # fix is "quote it in the YAML" instead of "hunt a rendering bug".
+    for k, v in values_raw.items():
+        if isinstance(v, bool):
+            raise SchemaError(
+                f"`values.{k}` is a bool ({v!r}) — YAML coerced an unquoted "
+                f"OFF/ON/YES/NO/TRUE/FALSE token. Quote it in the YAML: `{k}: \"OFF\"`."
+            )
     values: dict[int, str] = {int(k): str(v) for k, v in values_raw.items()}
+
+    bands_raw = entry.get("bands")
+    bands: dict[str, float] = {}
+    if bands_raw is not None:
+        if not isinstance(bands_raw, dict):
+            raise SchemaError("`bands` must be a mapping")
+        if encoding not in ("uint", "sint"):
+            raise SchemaError(f"`bands` only valid on uint/sint signals, got {encoding!r}")
+        unknown = set(bands_raw) - VALID_BAND_KEYS
+        if unknown:
+            raise SchemaError(f"unknown `bands` keys {sorted(unknown)}; valid: {sorted(VALID_BAND_KEYS)}")
+        for k, v in bands_raw.items():
+            if not isinstance(v, (int, float)) or isinstance(v, bool):
+                raise SchemaError(f"`bands.{k}` must be numeric, got {type(v).__name__}")
+            bands[k] = float(v)
 
     return Signal(
         name=name,
@@ -249,6 +286,7 @@ def _parse_entry(entry: dict) -> Signal:
         offset=float(entry.get("offset", 0)),
         unit=entry.get("unit"),
         values=values,
+        bands=bands,
         notes=str(entry.get("notes", "")),
     )
 

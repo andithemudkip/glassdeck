@@ -4,7 +4,7 @@
 Two open questions the paddock stand couldn't answer:
 
   Q1. Is `540` D1 (formerly "warmup index", currently "throttle-derived +
-      coolant-keyed idle offset" per [[signal-warmup-index]]) actually load-
+      coolant-keyed idle offset" per [[signal-fuel-injection-setpoint]]) actually load-
       derived? The 2026-06-23 paddock-stand test ruled out load-derived on the
       basis of drivetrain drag not moving it at fixed RPM/throttle. Drivetrain
       drag ≠ real riding load (no wind, no acceleration inertia). This corpus
@@ -12,7 +12,7 @@ Two open questions the paddock stand couldn't answer:
 
   Q2. Same test for `121` D0:D1 and `121` D2:D3 (twin int16 channels A, B —
       currently "encoding confirmed, physical quantity open" per
-      [[byte-121-twin-int16]]). Corpus-sweep verdict was that these aren't
+      [[signal-engine-torque]]). Corpus-sweep verdict was that these aren't
       MAP/load-driven (best r vs RPM×throttle ≈ +0.31 on paddock-stand data)
       and are more likely lambda short-term trim or ignition advance
       correction. Same "paddock-stand load isn't real load" caveat applies.

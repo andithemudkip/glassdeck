@@ -8,7 +8,7 @@ related:
     - can/post-kill-decay-groups
     - can/signal-rpm
     - can/signal-throttle-position
-    - can/signal-warmup-index
+    - can/signal-fuel-injection-setpoint
   references:
     - ktm-can-decoder
     - svartpilen-401-dash-user-manual
@@ -25,7 +25,7 @@ related:
 > Splits:
 >
 > - Phases A + B + C (mode toggle, trip reset, dash button short-presses) → [2026-07-12-dash-inputs](2026-07-12-dash-inputs.md). Cluster-side only, **engine-off** for cleanest per-window bit diffs on the slow-decay group (`12A`, `12D`, `12E`, `450`, `541`). Phase A carries a contingency: if mode toggle needs engine-on, abort Phase A but keep B/C and re-run A engine-on later.
-> - Phases D + E (throttle blip engine-on, five held RPM setpoints in neutral) → [2026-07-12-neutral-rpm-sweep](2026-07-12-neutral-rpm-sweep.md). Matched to [[2026-06-23-engine-driven-rear-spin]] for the `540` D1 / [[signal-warmup-index]] re-attribution and the `121` D0..D3 characterization. Free MIL bit + side-stand engine-on confirmation from the timeline.
+> - Phases D + E (throttle blip engine-on, five held RPM setpoints in neutral) → [2026-07-12-neutral-rpm-sweep](2026-07-12-neutral-rpm-sweep.md). Matched to [[2026-06-23-engine-driven-rear-spin]] for the `540` D1 / [[signal-fuel-injection-setpoint]] re-attribution and the `121` D0..D3 characterization. Free MIL bit + side-stand engine-on confirmation from the timeline.
 >
 > Both split experiments also drop the initial key-off silence window: the wifi-bridge is now bike-powered (ADR 0018 / [[project-wifi-bridge-ota]]), so the ESP is off until the key is on and the capture host connects to `ws://<esp>/stream` after key-on. The dash-inputs procedure yaml is the first one written under that constraint.
 >

@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Serve the wifi-bridge live view locally, backed by a recorded capture.
+# Point a browser at http://localhost:8080/ to see the actual UI running
+# against a real ride — no ESP or bike required.
+#
+# Usage: replay-browser [session] [extra flags for scripts/replay_browser.py]
+#   session   dir under logs/, or absolute path (default: 2026-07-22-first-moving-ride)
+#
+# Common flags (passed through):
+#   --speed N       playback speed multiplier (default 1.0)
+#   --no-timing     firehose (UI stress-test)
+#   --loop          restart from the top on EOF
+#   --port N        HTTP port (default 8080)
+#   --pattern GLOB  file glob within the session (default: capture.log, else *.log)
+#
+# Runs the same gen_wifi_bridge_index.py the firmware build uses, so what
+# you see is exactly what you'd flash.
+
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+
+session=""
+if [[ $# -gt 0 && "$1" != -* ]]; then
+    session="$1"; shift
+fi
+
+VENV_PY="$REPO_ROOT/.venv/bin/python"
+if [[ -x "$VENV_PY" ]]; then
+    py="$VENV_PY"
+else
+    py="python3"
+    info ".venv not found at $REPO_ROOT/.venv — using system python3"
+    info "if aiohttp is missing: python3 -m venv .venv && .venv/bin/pip install -r scripts/requirements.txt"
+fi
+
+cd "$REPO_ROOT"
+if [[ -n "$session" ]]; then
+    exec "$py" scripts/replay_browser.py --session "$session" "$@"
+else
+    exec "$py" scripts/replay_browser.py "$@"
+fi

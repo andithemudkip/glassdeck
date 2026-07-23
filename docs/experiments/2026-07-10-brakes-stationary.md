@@ -4,7 +4,7 @@ status: partial
 phase: 2
 related:
   findings:
-    - docs/findings/can/byte-121-twin-int16.md
+    - docs/findings/can/signal-engine-torque.md
     - docs/findings/can/signal-wheel-speed-front.md
     - docs/findings/can/signal-wheel-speed-rear.md
     - docs/findings/can/signal-engine-off-counter.md
@@ -20,7 +20,7 @@ related:
 
 Front-brake and rear-brake inputs surface on the always-on broadcast set as either analog pressure values (BE int16 or u16) or on/off switch bits. Most likely landing zones:
 
-1. **`121` D0:D1 or D2:D3** — twin BE int16 channels (encoding confirmed in [[byte-121-twin-int16]], semantic unknown). 20 ms period is right for a brake-related signal.
+1. **`121` D0:D1 or D2:D3** — twin BE int16 channels (encoding confirmed in [[signal-engine-torque]], semantic unknown). 20 ms period is right for a brake-related signal.
 2. **`450`** — currently frozen; if any live rider input moves it, we unlock the whole ID (per `docs/signals/coverage.md` priority heuristic).
 3. **A byte on `12D`** — 10 ms wheel-speed ID; ABS logic often collocates brake input with wheel data.
 4. **A byte on `540` / `541`** — plausible slow-decay ABS/ECU state carrier.

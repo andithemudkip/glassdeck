@@ -20,7 +20,7 @@ Per [[2026-06-25-battery-voltage-desk-scan]]: 10 engine-off windows across 8 ses
 
 ## What the scan actually found
 
-Every byte with `|Δ(on − off)| ≥ 1 LSB` is fully attributable to a documented signal — RPM, throttle, coolant, kill mirrors, warmup index, ignition-armed bit, side-stand mirror, engine-on counter, key-on ramp counter, or the twin int16 fuel/ignition channels at `121` D0..D3 ([[byte-121-twin-int16]]). The largest unattributed Δ is `541 D5` at −6.1 LSB, which is the high byte of the same key-on ramp pattern as `541 D6` (scattered engine-off, exact zero engine-on — wrong shape for voltage).
+Every byte with `|Δ(on − off)| ≥ 1 LSB` is fully attributable to a documented signal — RPM, throttle, coolant, kill mirrors, warmup index, ignition-armed bit, side-stand mirror, engine-on counter, key-on ramp counter, or the twin int16 fuel/ignition channels at `121` D0..D3 ([[signal-engine-torque]]). The largest unattributed Δ is `541 D5` at −6.1 LSB, which is the high byte of the same key-on ramp pattern as `541 D6` (scattered engine-off, exact zero engine-on — wrong shape for voltage).
 
 The uint16 BE pair scan turned up nothing in plausible voltage ranges either. The closest non-known pair, `12A D1:D2`, sits at 1244 / 1280 (≈ 0.36 V step at 0.01 V/LSB) but is driven by a single-LSB drift on D1 that's at the noise floor; D2 is essentially zero throughout.
 

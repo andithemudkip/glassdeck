@@ -6,7 +6,7 @@ related:
   findings:
     - fuel-consumption-absent-from-broadcasts
     - always-on-broadcast-ids
-    - byte-121-twin-int16
+    - signal-engine-torque
     - signal-engine-on-counter
   decisions: []
   logs:
@@ -94,7 +94,7 @@ Score = `pearson(rates, RPM·throttle) × log1p(rate_range)`.
 | `pair 120 D1:D2` | 31 644..39 817 | 0.56 | 221.6 | artifact: `(rpm_lo << 8) \| throttle` — noise on rpm_lo |
 | `pair 12D D2`, `pair 12D D1`, `pair 12D D6` | wide | 0.38..0.84 | high | rear-wheel-speed (already attributed) |
 | `pair 129 D0` | 0..4096 | 0.44 | 4096 | gear nibble (already attributed) |
-| `pair 121 D2` (int16-B) | 120..43 988 | 0.23 | 24 153 | [[byte-121-twin-int16]] — sanity check: low R² because of mid-RPM peak shape, correct |
+| `pair 121 D2` (int16-B) | 120..43 988 | 0.23 | 24 153 | [[signal-engine-torque]] — sanity check: low R² because of mid-RPM peak shape, correct |
 
 The `5A0 D6` / `5B0 D6` candidates have a 3-LSB total range across the entire idle → 5000-RPM sweep — far too narrow to plausibly carry fuel rate, which needs ~10× dynamic range from idle to WOT. Most likely a small advance trim or similar low-resolution correction.
 
@@ -143,7 +143,7 @@ Indistinguishable from how a real fuel signal would behave from the rider's poin
 
 **What this does NOT tell us:**
 
-  - Whether the OEM uses an internal `mg/stroke` lookup table keyed on `(RPM, MAP_estimate)` rather than `(RPM, throttle)` directly. We don't have a MAP-equivalent signal on the bus either — `121` D0:D3 was the strongest MAP candidate and was ruled out as ignition-advance-or-trim by [[byte-121-twin-int16]]. So MAP would also have to be derived locally if used. Practically the same constraint for our replacement.
+  - Whether the OEM uses an internal `mg/stroke` lookup table keyed on `(RPM, MAP_estimate)` rather than `(RPM, throttle)` directly. We don't have a MAP-equivalent signal on the bus either — `121` D0:D3 was the strongest MAP candidate and was ruled out as ignition-advance-or-trim by [[signal-engine-torque]]. So MAP would also have to be derived locally if used. Practically the same constraint for our replacement.
   - Whether a fuel signal would appear under conditions not yet captured (overrun fuel cutoff during a real road decel, dealer mode, fault state). Possible but increasingly unlikely given coverage now spans 800k frames across cold boot, idle, RPM sweep, kill, gear cycling, clutch, side-stand, wheel spin engine-off, wheel spin engine-on, and three input-toggle sessions.
 
 ## Follow-ups

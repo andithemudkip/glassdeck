@@ -18,7 +18,7 @@ Index of decoded signals and per-ID payload coverage on the 2020 Husqvarna Svart
 | wheel_speed_front | `12D` | D0:D1 bits 15:4, 12-bit BE, 1/10 km/h | provisional | [signal-wheel-speed-front](../findings/can/signal-wheel-speed-front.md) |
 | rear_speed_band | `12D` | D1 low nibble (bits 3:0), 4-bit uint, 25 km/h step | provisional | [signal-12d-d1-bit0](../findings/can/signal-12d-d1-bit0.md) |
 | wheel_speed_rear | `12D` | D5:D6 BE u16, ~0.0565 km/h | provisional | [signal-wheel-speed-rear](../findings/can/signal-wheel-speed-rear.md) |
-| warmup_index | `540` | D1 u8 (interpretation under review) | provisional | [signal-warmup-index](../findings/can/signal-warmup-index.md) |
+| fuel_injection_setpoint | `540` | D1 u8 (ECU base fuel-injection setpoint, recomputed at ~1 Hz) | provisional | [signal-fuel-injection-setpoint](../findings/can/signal-fuel-injection-setpoint.md) |
 | side_stand | `540` | D3 bit 0 bool | confirmed | [signal-side-stand](../findings/can/signal-side-stand.md) |
 | coolant_temp | `540` | D5:D6 BE u16, 0.1 °C | confirmed | [signal-coolant-temp](../findings/can/signal-coolant-temp.md) |
 | kill_switch | `541` | D2 bit 4 bool (primary) | confirmed | [signal-kill-switch](../findings/can/signal-kill-switch.md) |
@@ -36,8 +36,8 @@ Index of decoded signals and per-ID payload coverage on the 2020 Husqvarna Svart
 
 | Slot | ID | Location | Status | Finding |
 |---|---|---|---|---|
-| 121 channel A | `121` | D0:D1 BE int16 | encoding confirmed | [byte-121-twin-int16](../findings/can/byte-121-twin-int16.md) |
-| 121 channel B | `121` | D2:D3 BE int16 | encoding confirmed | [byte-121-twin-int16](../findings/can/byte-121-twin-int16.md) |
+| engine_torque | `121` | D0:D1 signed int16 BE (~0.25 N·m/LSB provisional) | confirmed | [signal-engine-torque](../findings/can/signal-engine-torque.md) |
+| engine_torque (redundant) | `121` | D2:D3 signed int16 BE — mirrors D0:D1 within ~1 LSB | confirmed | [signal-engine-torque](../findings/can/signal-engine-torque.md) |
 | front-wheel-speed mirror | `12D` | D3:D4 BE u16, 3/64 km/h LSB | encoding confirmed on D4 (D3 unexercised < 12.7 km/h) | [byte-12d-d3-d4-front-mirror](../findings/can/byte-12d-d3-d4-front-mirror.md) |
 | engine-state bits (5×) | `121`, `540` | `121` D1.5, D1.7, D5.3; `540` D2.6, D3.4 | flips engine-on / engine-off, attribution open | [engine-state-bits-decay-shape](../findings/can/engine-state-bits-decay-shape.md) |
 | D7 checksum | 9 IDs | D7 | confirmed: 6-cycle XOR ⊕ 5-bit GF(2) hash of D0..D6 | [byte-d7-cycle-hash](../findings/can/byte-d7-cycle-hash.md) |
@@ -64,7 +64,7 @@ Cell legend:
 | `12D` |  10 ms | S frontWS hi | S◐ frontWS hi-nib + rear-speed band lo-nib (b0-3) | dup coarse rear-speed mirror, 1/10 km/h | dup frontWS-mirror hi (u16 BE at ~0.0577 km/h) | dup frontWS-mirror lo | S rearWS hi | S rearWS lo | h |
 | `12E` |  20 ms | 0 | 0 | 0 | 0 | 0 | 0 | S◐ abs-lamp mirror b4, b5 | h |
 | `450` |  50 ms | 0 | 0 | 0 | 0 | 0 | 0 | ? static (0x28 constant) | 0 |
-| `540` | 100 ms | 0 | S warmup-index | S◐ es b6 | S◐ side-stand b0 + es b4 (b5–7 = 0) | 0 | S coolant hi | S coolant lo | 0 |
+| `540` | 100 ms | 0 | S fuel-sp | S◐ es b6 | S◐ side-stand b0 + es b4 (b5–7 = 0) | 0 | S coolant hi | S coolant lo | 0 |
 | `541` |  20 ms | 0 | 0 | S◐ kill-switch b4 | S◐ time-bin 0/1/2 | S engine-on counter (full uint8 mod-256) | 0 | S engine-off counter | h |
 | `5A0` | 100 ms | 0 | 0 | 0 | 0 | ? static (0x04 latched at engine-start) | 0 | 0 | h |
 | `5B0` | 100 ms | S◐ kill-dup b4 (b0-3, b5-7 = 0) | 0 | 0 | 0 | 0 | 0 | 0 | h |

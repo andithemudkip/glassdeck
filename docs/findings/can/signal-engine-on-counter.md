@@ -57,7 +57,7 @@ Bit 0 is the LSB. Engine-off toggle counts are zero in every off session (cold-b
 
 ## Why this isn't fuel consumption
 
-The byte was on the candidate list for fuel-consumption derivation. It isn't — the rate is decoupled from RPM, so it can't be an injection-event count and it can't be an integrated-fuel-mass quantity. Useful only as engine-hours (modulo 128 s, so usable for short windows or once dewrapped across captures), not for L/h. See the analysis in `scripts/id541_d4_tick_rate.py` and the broader fuel-rate hunt notes in [[byte-121-twin-int16]] and the planned fuel-level walkdown.
+The byte was on the candidate list for fuel-consumption derivation. It isn't — the rate is decoupled from RPM, so it can't be an injection-event count and it can't be an integrated-fuel-mass quantity. Useful only as engine-hours (modulo 128 s, so usable for short windows or once dewrapped across captures), not for L/h. See the analysis in `scripts/id541_d4_tick_rate.py` and the broader fuel-rate hunt notes in [[signal-engine-torque]] and the planned fuel-level walkdown.
 
 ## What this is NOT
 
@@ -77,4 +77,4 @@ The byte was on the candidate list for fuel-consumption derivation. It isn't —
 - [`scripts/id541_d4_tick_rate.py`](../../../scripts/id541_d4_tick_rate.py) — re-derives the table above.
 - [`docs/experiments/2026-06-17-payload-diff-idle.md`](../../experiments/2026-06-17-payload-diff-idle.md) — original byte-level CRC-LIKE tag (superseded).
 
-See also: [[byte-d7-cycle-hash]] (different ID, separate algorithm), [[always-on-broadcast-ids]], [[byte-121-twin-int16]].
+See also: [[byte-d7-cycle-hash]] (different ID, separate algorithm), [[always-on-broadcast-ids]], [[signal-engine-torque]].

@@ -23,7 +23,7 @@ Across every captured condition to date — three engine-idle baselines spanning
 
 ## What the scans actually found
 
-**Rate scan:** no clean candidate. Top unknown candidates by composite score were either tiny-range advance trims (`5A0 D6:D7` and `5B0 D6:D7` at 3-LSB total range across the full RPM sweep — too narrow to plausibly carry fuel rate, which needs ~10× dynamic range from idle to WOT) or fit artifacts from already-attributed bytes (`(rpm_lo << 8) | throttle` reading as a "fit" because both components are in the regressor). [[byte-121-twin-int16]] correctly ranked low (R² = 0.23) because its mid-RPM peak shape doesn't fit a linear `RPM·throttle` model — confirms scan discrimination is working.
+**Rate scan:** no clean candidate. Top unknown candidates by composite score were either tiny-range advance trims (`5A0 D6:D7` and `5B0 D6:D7` at 3-LSB total range across the full RPM sweep — too narrow to plausibly carry fuel rate, which needs ~10× dynamic range from idle to WOT) or fit artifacts from already-attributed bytes (`(rpm_lo << 8) | throttle` reading as a "fit" because both components are in the regressor). [[signal-engine-torque]] correctly ranked low (R² = 0.23) because its mid-RPM peak shape doesn't fit a linear `RPM·throttle` model — confirms scan discrimination is working.
 
 **Counter scan:** zero unknown candidates. Six monotone byte/pair hits total across all 11 IDs, every single one already attributed:
 
@@ -48,7 +48,7 @@ This is indistinguishable from a real fuel signal at the rider's interface, but 
 
 ## What this does NOT cover
 
-  - Whether the OEM uses an `mg/stroke` lookup keyed on `(RPM, MAP_estimate)` rather than `(RPM, throttle)` directly. No MAP-equivalent signal is on the bus either ([[byte-121-twin-int16]] was the strongest candidate and turned out to be ignition advance or fuel trim). MAP would have to be locally derived too — same constraint for our replacement.
+  - Whether the OEM uses an `mg/stroke` lookup keyed on `(RPM, MAP_estimate)` rather than `(RPM, throttle)` directly. No MAP-equivalent signal is on the bus either ([[signal-engine-torque]] was the strongest candidate and turned out to be ignition advance or fuel trim). MAP would have to be locally derived too — same constraint for our replacement.
   - Conditions not yet captured: fuel cutoff during real-road overrun, dealer mode, fault state. A fuel byte could in principle appear there, but coverage now spans cold boot, idle, RPM sweep, kill, gear cycling, clutch, side-stand, wheel spin engine-off, wheel spin engine-on, and three input-toggle sessions — 800k frames with no anomalies — so the prior is low.
 
 ## Consequences for the replacement dashboard
@@ -58,4 +58,4 @@ This is indistinguishable from a real fuel signal at the rider's interface, but 
   - **Fuel level is a separate concern** — see [[project-fuel-on-can]]: the tank sender is expected to be on the harness, not on CAN. Needs its own hardware tap if we want a level reading rather than just a consumption-derived range estimate.
   - **No further fuel-on-CAN experiments.** If a fuel-shaped byte ever surfaces incidentally during future engine-on captures, that would refute and reopen.
 
-See also: [[always-on-broadcast-ids]], [[signal-rpm]], [[signal-throttle-position]], [[signal-engine-on-counter]], [[byte-121-twin-int16]], [[battery-voltage-absent-from-always-on-broadcasts]].
+See also: [[always-on-broadcast-ids]], [[signal-rpm]], [[signal-throttle-position]], [[signal-engine-on-counter]], [[signal-engine-torque]], [[battery-voltage-absent-from-always-on-broadcasts]].

@@ -6,8 +6,8 @@ related:
   findings:
     - can/signal-rpm
     - can/signal-throttle-position
-    - can/signal-warmup-index
-    - can/byte-121-twin-int16
+    - can/signal-fuel-injection-setpoint
+    - can/signal-engine-torque
     - can/signal-12d-d1-bit0
   references:
     - ktm-can-decoder
@@ -22,7 +22,7 @@ related:
 
 # Neutral RPM sweep — throttle blip + five held setpoints matched to the in-gear rear-spin
 
-Split half of the original engine-on-stationary batch. Dash inputs (mode toggle, trip reset, button presses) are now in [2026-07-12-dash-inputs](2026-07-12-dash-inputs.md). This experiment is the throttle/RPM-in-neutral no-load reference for the in-gear engine-driven capture, and the [[signal-warmup-index]] discriminator.
+Split half of the original engine-on-stationary batch. Dash inputs (mode toggle, trip reset, button presses) are now in [2026-07-12-dash-inputs](2026-07-12-dash-inputs.md). This experiment is the throttle/RPM-in-neutral no-load reference for the in-gear engine-driven capture, and the [[signal-fuel-injection-setpoint]] discriminator.
 
 ## Hypothesis
 
@@ -32,7 +32,7 @@ Two complementary motion patterns, both engine-on, both in neutral, both compare
 
 2. **Held RPM setpoints in neutral (Phase E — steady-state, no load).** Five setpoints matched to the in-gear rear-spin sweep (2000, 2500, 3500, 4500, 5500 RPM), held ~12 s each with idle rests between. Analysis reads RPM from CAN frame-by-frame, so ±200 RPM of target is fine — what matters is **steady throttle hold** for the full 12 s. Purpose: decouple throttle from RPM for `540` D1 attribution.
 
-Analysis of the in-gear capture ([`scripts/engine_load_scan.py`](../../scripts/engine_load_scan.py) + [`scripts/idle_load_compare.py`](../../scripts/idle_load_compare.py)) already established two things about `540` D1: (a) off-idle it fits `D1 ≈ 14 + 0.8 × throttle%` cleanly across the 5 setpoints, and (b) in-gear-clutch-out at idle (genuine drivetrain drag) reads identical to neutral-idle at matched RPM/throttle — **MAP / engine-load is ruled out** because a real load signal would respond to drivetrain drag at fixed throttle. The leading interpretation is now **throttle-derived with a coolant-keyed idle offset**, recasting the prior [[signal-warmup-index]] reading. Phase E discriminates this from the remaining alternative (RPM-derived) cleanly:
+Analysis of the in-gear capture ([`scripts/engine_load_scan.py`](../../scripts/engine_load_scan.py) + [`scripts/idle_load_compare.py`](../../scripts/idle_load_compare.py)) already established two things about `540` D1: (a) off-idle it fits `D1 ≈ 14 + 0.8 × throttle%` cleanly across the 5 setpoints, and (b) in-gear-clutch-out at idle (genuine drivetrain drag) reads identical to neutral-idle at matched RPM/throttle — **MAP / engine-load is ruled out** because a real load signal would respond to drivetrain drag at fixed throttle. The leading interpretation is now **throttle-derived with a coolant-keyed idle offset**, recasting the prior [[signal-fuel-injection-setpoint]] reading. Phase E discriminates this from the remaining alternative (RPM-derived) cleanly:
 
 - **D1(neutral) < D1(in-gear) at matched RPM** ⇒ throttle-derived. In neutral the same RPM is reached at much lower throttle, so a throttle-keyed byte reads lower. This is the leading-hypothesis prediction.
 - **D1(neutral) ≈ D1(in-gear) at matched RPM** ⇒ RPM-derived. Throttle doesn't matter; only RPM drives the value.
@@ -96,7 +96,7 @@ Kill switch, decay window, key off, tail silence. `session.md` — log the ABS m
 
 2. **Phase E — held RPM setpoints (matched-RPM comparison vs [[2026-06-23-engine-driven-rear-spin]]).**
    - Run [`scripts/engine_load_scan.py`](../../scripts/engine_load_scan.py) on this capture with `--session logs/<this session>` and compare the per-setpoint table directly against the in-gear table from the rear-spin capture.
-   - **`540` D1 (the [[signal-warmup-index]] re-attribution).** Pre-existing evidence from the rear-spin capture already ruled MAP/engine-load out and fit `D1 ≈ 14 + 0.8 × throttle%` off-idle (see [[signal-warmup-index]] preamble). Phase E discriminates throttle-derived from RPM-derived. At matched RPM:
+   - **`540` D1 (the [[signal-fuel-injection-setpoint]] re-attribution).** Pre-existing evidence from the rear-spin capture already ruled MAP/engine-load out and fit `D1 ≈ 14 + 0.8 × throttle%` off-idle (see [[signal-fuel-injection-setpoint]] preamble). Phase E discriminates throttle-derived from RPM-derived. At matched RPM:
      - D1(neutral) < D1(in-gear), and a linear D1-vs-throttle fit in Phase E recovers the same slope as the in-gear fit → **throttle-derived** (the leading-hypothesis outcome). Rewrite the finding under a throttle-fuel-index name; the coolant offset stays as the idle-only behaviour.
      - D1(neutral) ≈ D1(in-gear) within noise → **RPM-derived**, and the in-gear throttle correlation was just RPM and throttle being co-linear in that capture. Rewrite the finding around RPM-keyed semantics.
      - D1(neutral) > D1(in-gear) at matched RPM → unexpected; would suggest some inverse-load behaviour or a sensor we don't know about — flag as a new puzzle.
@@ -117,7 +117,7 @@ Kill switch, decay window, key off, tail silence. `session.md` — log the ABS m
 
 - **Throttle decoder holds engine-on** → promote engine-off throttle finding from `provisional` (if that's how it was filed) to `confirmed` engine-on.
 - **An RPM-tracking byte appears** → new candidate finding; may need a dedicated dyno-style sweep to fully characterise.
-- **`540` D1 reads lower in Phase E than in [[2026-06-23-engine-driven-rear-spin]] at matched RPM** → [[signal-warmup-index]] is actually a **throttle-derived fuel index** (or, alternate outcome, RPM-derived); rewrite the finding under the new name and leave the cold→warm walk as a secondary idle-floor effect. This is the headline outcome of the load-decoupling design.
+- **`540` D1 reads lower in Phase E than in [[2026-06-23-engine-driven-rear-spin]] at matched RPM** → [[signal-fuel-injection-setpoint]] is actually a **throttle-derived fuel index** (or, alternate outcome, RPM-derived); rewrite the finding under the new name and leave the cold→warm walk as a secondary idle-floor effect. This is the headline outcome of the load-decoupling design.
 - **`121` D0..D3 reproduce the non-monotonic RPM-banded shape in Phase E** → those bytes encode an RPM-keyed look-up (ignition advance map, fuel map index, or similar) independent of load; deserves a follow-up session targeting the band boundaries.
 - **`12D` D1 bit 0 stays LOW at 5500 RPM neutral** → confirms the 27 km/h speed threshold from the in-gear reading. Fires at 5500 RPM neutral → the bit is RPM-keyed and the in-gear reading was a coincidence of gear ratio.
 
