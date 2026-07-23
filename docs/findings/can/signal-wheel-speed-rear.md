@@ -5,6 +5,7 @@ established_by:
   - 2026-06-22-wheel-spin-paddock-stand
   - 2026-06-23-engine-driven-rear-spin
   - 2026-06-24-front-wheel-hand-spin
+  - 2026-07-22-first-moving-ride
 references:
   - ktm-can-decoder
 ---
@@ -15,16 +16,18 @@ Rear wheel speed on the 2020 Husqvarna Svartpilen 401 is broadcast in arbitratio
 
 | Bytes | Encoding | Scale | Behaviour |
 |------:|----------|-------|-----------|
-| **D5:D6** | big-endian uint16 (D5 = high, D6 = low) | **≈ 1/16 km/h per LSB** (0.0625 km/h) | Primary signal. Full range, clean. |
+| **D5:D6** | big-endian uint16 (D5 = high, D6 = low) | **≈ 0.0565 km/h per LSB** (= 1/17.7) | Primary signal. Full range, clean. |
 | **D2**    | uint8 alone (D3 is **not** a high byte) | **≈ 1/10 km/h per LSB** | Coarse mirror. **Wraps modulo 256 above ~25.5 km/h.** |
 | D3        | STATIC `0x00`                            | —     | Not a high byte for D2. Refuted by engine-driven sweep where D2 wrapped through 0x00..0xFF while D3 stayed at 0x00. |
 
 ```python
-rear_wheel_kmh = ((data[5] << 8) | data[6]) / 16.0       # primary
+rear_wheel_kmh = ((data[5] << 8) | data[6]) * 0.0565     # primary; ±1% (see LSB section)
 rear_wheel_kmh_coarse = data[2] / 10.0                   # only valid below ~25.5 km/h
 ```
 
 D5:D6 has full speed range and clean integer behaviour. Use it as the source of truth. D2 is useful as a sanity check at low speed but should not be relied on alone.
+
+**LSB note.** Two independent measurements converge on ~ 0.0563–0.0565 km/h/LSB (not the round 1/16 = 0.0625 previously assumed): the engine-driven best-fit against RPM × gearing predicted speed ([[2026-06-23-engine-driven-rear-spin]]) landed on 0.05633, and cross-checks against rider-observed dash values on the first moving ride ([[2026-07-22-first-moving-ride]]) landed on 0.05649 (dash-101 peak) and 0.05682 (dash-60 steady). Working value 0.0565; final ±1 % anchor pending a dash-verified moving procedure.
 
 ## Evidence — engine-driven sweep ([[2026-06-23-engine-driven-rear-spin]])
 
@@ -97,10 +100,10 @@ Refines the earlier "D0..D3 preserved, D4..D7 differs" hypothesis: Husqvarna kep
 
 ## Open
 
-- **Exact LSB.** Best-fit slope 0.05633 vs binary-friendly 0.0625 differs by ~10%, almost certainly because the gearing/tyre numbers are back-of-envelope. Resolves either by (a) sourcing authoritative KTM 390 platform gearing + measured rolling circumference, or (b) cross-checking against the OEM speedo on a low-speed roll. **Strongly tilted toward 1/16 km/h (= 0.0625)** by analogy with the front: [[signal-wheel-speed-front]] is pinned at exactly **1/192 km/h** (a clean binary-friendly fraction, = 1/12 km/h per effective transmitted step with [[byte-encoding-12-in-16]] packing). Both channels using binary-friendly fractions makes the rear's "best-fit 0.05633 ≈ 0.0625" gap almost certainly a gearing artifact rather than a non-binary unit. Front does **not** directly transfer (different LSB families) but does pin the *style* of LSB Bosch chose, which makes 1/16 the only remaining candidate worth taking seriously for the rear.
+- ~~**Exact LSB.**~~ Converged on ~ 0.0565 km/h/LSB across three independent measurements (engine-driven best-fit 0.05633; dash-101 endpoint 0.05649; dash-60 steady 0.05682, per [[2026-07-22-first-moving-ride]]). Final anchor to ±1 % pending the dash-verified moving procedure (rider holds ~ 20/40/60/80/100 km/h with in-procedure marks). Previously suspected clean 1/16 = 0.0625 is refuted by all three anchors. The finding's Bosch-clean-fraction argument was already circular — [[signal-wheel-speed-front]]'s "clean fraction 1/192" was also incorrect (see that finding's 2026-07-22 rewrite), so the analogy doesn't apply.
 - ~~**Front wheel speed location.**~~ Closed by [[2026-06-24-front-wheel-hand-spin]] — see [[signal-wheel-speed-front]].
-- **D4 STATIC `0x00`.** Unused in everything observed so far; possibly reserved for a third signal (e.g. estimated vehicle speed combining both wheels). No motivation to chase until/unless something exercises it.
-- **Does the rear also use 12-bit-in-16-bit packing?** Front does ([[byte-encoding-12-in-16]] → [[signal-wheel-speed-front]]); rear has not been checked. Cheap test: scan `(raw_u16 & 0x000F)` across the engine-driven sweep capture. If always 0, rear is 12-bit at 1/16 km/h (effective resolution 1 km/h per step, which would contradict the 0.05633 best-fit and force re-examination). If sometimes non-zero, rear is genuine 16-bit at 1/16 km/h.
-- **High-speed wrap behaviour.** D5:D6 BE handles wraps cleanly through to 29.64 km/h (= 0x1DA in the encoding); above ~256 km/h the uint16 would wrap, far beyond anything this bike will see. D2 wraps every 25.5 km/h forever — a confirmed quirk, no follow-up needed.
+- **D4 STATIC `0x00`.** Unused in everything observed so far; possibly reserved for a third signal (e.g. estimated vehicle speed combining both wheels). [[2026-07-22-first-moving-ride]] gets rear speeds above 100 km/h without D4 changing, so it's not simply a high-byte for a wider counter.
+- ~~**Does the rear also use 12-bit-in-16-bit packing?**~~ The 12-bit-in-16-bit claim for **front** turned out to be an engine-off corpus artifact (see [[signal-wheel-speed-front]] 2026-07-22 rewrite). This open question is moot — rear is full uint16 BE, front is also full uint16 BE, both are just linear speed encodings at different LSBs. Confirmed by [[2026-07-22-first-moving-ride]]: rear D6 low nibble is non-zero on 93.3–93.9 % of moving frames across all five files, consistent with a straightforward u16 with no low-bit-reserved segmentation.
+- **High-speed wrap behaviour.** D5:D6 BE handles wraps cleanly through 110 km/h in [[2026-07-22-first-moving-ride]] (raw ~1961 = 0x07A9); the uint16 max at the new LSB is ~ 3700 km/h, far beyond anything this bike will see. D2 wraps every 25.5 km/h forever — a confirmed quirk, no follow-up needed.
 
 See also: [[always-on-broadcast-ids]], [[ktm-can-decoder]], [[signal-side-stand]] (contrast with the `540` -1-byte shift pattern — `12D` doesn't shift, it swaps roles within the payload).

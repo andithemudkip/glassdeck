@@ -5,7 +5,8 @@ established_by:
   - 2026-06-17-key-on-cold-boot
   - 2026-06-22-wheel-spin-paddock-stand
   - 2026-06-24-front-wheel-hand-spin
-source: rider observation
+  - 2026-07-22-first-moving-ride
+source: rider observation + CAN
 ---
 
 # Dash warning-light behavior — check engine, ABS, auto-headlight
@@ -15,18 +16,16 @@ Three dash lamps have observable, deterministic extinction/activation conditions
 | Lamp           | State at key-on (engine off) | Extinction / activation condition                          |
 |----------------|------------------------------|-------------------------------------------------------------|
 | Check engine   | Lit, held                    | Extinguishes ~1 s after engine starts                       |
-| ABS            | Lit, held                    | Extinguishes ~6 km/h **with engine running** (provisional)  |
+| ABS            | Lit, held                    | Extinguishes at first front-wheel > ~6 km/h crossing with engine running. Observed via CAN — see [[signal-abs-lamp]]. |
 | Auto-headlight | Off                          | Activates above some speed threshold; **off-bus, rear-wheel-keyed** (no CAN bit) |
 
 Both lamps complete the dash self-test (sweep at key-on) and then settle into the "lit" state until their respective conditions are met. Numbers above are rider observation, not measured — treat as approximate ("about a second", "6 km/h or thereabouts").
 
-## ABS lamp: engine-running precondition (provisional)
+## ABS lamp: engine-running precondition (confirmed)
 
-The 2026-06-24 front-wheel hand-spin drove the front wheel to ~11 km/h on the dash (the OEM speedometer is front-wheel-sourced — see [[signal-wheel-speed-rear]] § "Why the OEM speedometer reads 0..."), well above the eyeballed ~6 km/h threshold from the original observation. **The ABS warning lamp did not extinguish.** Engine was off throughout.
+The 2026-06-24 front-wheel hand-spin drove the front wheel to ~11 km/h on the dash engine-off; the ABS lamp did **not** extinguish. [[2026-07-22-first-moving-ride]] then observed the ABS lamp extinguish at the first front-wheel > 6 km/h crossing engine-on, and repeat that behaviour independently on two fresh key-on cycles (moving-1 and moving-2 — key was cycled between them, confirmed by ESP boot-timestamp restart). Combined with the CAN attribution in [[signal-abs-lamp]] — six bits across `12A` and `12E` that flip synchronously with the extinguish event and don't flip back until next key-cycle — the engine-running precondition is confirmed.
 
-Working hypothesis: the ABS module runs a self-test that requires the pump motor (and thus engine power / running ECU state) before it will clear the warning, regardless of measured wheel speed. Plausible because production ABS systems on motorcycles commonly behave this way.
-
-Test to confirm: engine-on stationary capture with vehicle speed at zero — lamp should still be lit; then any future engine-on motion above ~6 km/h should extinguish it. The next engine-on session ([[2026-06-18-engine-on-stationary-inputs]]) will inadvertently rule out the trivial case (lamp doesn't extinguish without speed even with engine on).
+The lamp itself corresponds to one (or several redundant copies of) that six-bit cluster; see [[signal-abs-lamp]] for byte-level detail and the residual open question on whether all six bits carry identical semantics or just share the extinguish trigger.
 
 ## Auto-headlight: off-bus, rear-wheel-keyed
 

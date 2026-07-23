@@ -59,7 +59,7 @@ The throttle sweep also tested two adjacent hypotheses; both were rejected by th
 
 ## Open
 
-- **Engine-on behaviour.** Encoding confirmed engine-off; engine-on confirmation pending in [`2026-06-18-engine-on-stationary-inputs`](../../experiments/2026-06-18-engine-on-stationary-inputs.md). Expectation: D2 behaves identically; the throttle channel is independent of engine state.
+- **Engine-on behaviour.** Encoding confirmed engine-off; engine-on confirmation pending in [`2026-07-12-neutral-rpm-sweep`](../../experiments/2026-07-12-neutral-rpm-sweep.md) (Phase D throttle blip). Expectation: D2 behaves identically; the throttle channel is independent of engine state.
 - **Map / RBW state bit (`12A` D1 bit 6).** Stuck at 0 across the engine-off sweep. Engine-off may suppress it — re-test engine-on per the experiment above.
 - ~~**`541` D6 weak correlation.** r ≈ +0.26 vs D2 across this capture with range 20 counts.~~ **Resolved by [[2026-06-30-unknown-byte-corpus-sweep]]:** `541` D6 is the engine-OFF seconds counter ([[signal-engine-off-counter]]), not throttle-derived. Full-corpus r vs throttle peaked at +0.40 in the throttle-sweep session, dominated by D6's monotonic 1 Hz ramp coinciding with the rider's slow sweep. Closed.
 - **Full-scale ceiling.** Verify whether 254 is a hard ceiling (sentinel) or a calibration knee by capturing a hard-to-the-stop snap; if the value briefly overshoots to 255 the ceiling is calibration, if it never does, 254 is likely a reserved sentinel.

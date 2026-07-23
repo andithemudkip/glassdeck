@@ -1,0 +1,119 @@
+name: neutral-rpm-sweep
+description: >
+  Phase D throttle blips (engine-on transients) + Phase E five held RPM
+  setpoints in neutral (2000, 2500, 3500, 4500, 5500), matched to the
+  in-gear 2026-06-23-engine-driven-rear-spin sweep for load-decoupling
+  analysis. No-load reference for the 540 D1 attribution.
+experiment: 2026-07-12-neutral-rpm-sweep
+
+# Timing convention: marks fire at STEP START — i.e. the moment the rider is
+# cued to open the throttle (Phase D blip) or land on the setpoint (Phase E
+# hold). The bus broadcast is keyed off the throttle-plate edge, not the RPM
+# response, so this is the right reference for analysis.
+#
+# Wifi-bridge is bike-powered (ADR 0018): the ESP is off until the key is on.
+# So the capture host connects to ws://<esp>/stream AFTER key-on, and this
+# procedure starts with the assumption that key is already ON. No pre-key-off
+# silence window this time.
+#
+# Phase E setpoint holds are 12 s so engine_load_scan.py can reuse the same
+# WINDOW_SKIP_S=3 / WINDOW_LEN_S=8 that the in-gear rear-spin analysis
+# already expects. Rests between setpoints are 6 s — long enough to fall
+# back to idle without stretching the session.
+
+steps:
+  # ---------------------------------------------------------------- Setup
+  - prompt: "Key is already ON (wifi-bridge boots on ignition). Kill RUN, neutral, side stand down. Hands off the bike."
+    duration_secs: 8
+    mark: { key: mark, label: "post-key-on baseline start (engine off)" }
+
+  - prompt: "Press the STARTER. Let the engine catch — throttle closed."
+    duration_secs: 10
+    countdown_from: 3
+    mark: { key: start, label: "starter pressed" }
+
+  - prompt: "Idle settling — hands off. Clean 30 s idle baseline window."
+    duration_secs: 30
+    mark: { key: idle_settled, label: "idle settled (engine on)" }
+
+  # ----------------------------------------------- Phase D — throttle blip
+  - prompt: "PHASE D — throttle blips. Get your right hand on the throttle. Three blips coming, escalating."
+    duration_secs: 10
+
+  - prompt: "Small blip (~25 %, ~0.5 s). RPM should rise to ~3000."
+    duration_secs: 7
+    countdown_from: 3
+    mark: { key: throttle, label: "blip 1 small (~25 %)" }
+
+  - prompt: "Medium blip (~50 %, ~0.5 s). RPM to ~5000."
+    duration_secs: 7
+    countdown_from: 3
+    mark: { key: throttle, label: "blip 2 medium (~50 %)" }
+
+  - prompt: "Bigger blip (~75 %, ~0.5 s). RPM to ~7000. DO NOT go to redline."
+    duration_secs: 7
+    countdown_from: 3
+    mark: { key: throttle, label: "blip 3 big (~75 %)" }
+
+  # --------------------------- Phase E — held RPM setpoints (matched to in-gear)
+  # Mirror the engine-driven-rear-spin sweep (B1..B5) so engine_load_scan.py can
+  # compare the two captures directly at matched RPM. NO load (neutral), so
+  # throttle position needed for the same RPM is lower than in-gear. A
+  # genuinely load-driven byte (MAP / engine-load index) reads lower here than
+  # in the in-gear capture at the same RPM. 12 s holds match the in-gear
+  # session's per-setpoint window length.
+
+  - prompt: "PHASE E — held RPM setpoints in neutral, matching the engine-driven-rear-spin sweep. RPM by tach. Steady throttle hold matters more than the exact number."
+    duration_secs: 8
+
+  - prompt: "Bring engine to ~2000 RPM. Hold steady through the 12 s."
+    duration_secs: 16
+    countdown_from: 3
+    mark: { key: setpoint, label: "E1 — ~2000 RPM neutral" }
+
+  - prompt: "Back to idle, hands off."
+    duration_secs: 6
+
+  - prompt: "Bring engine to ~2500 RPM. Hold steady through the 12 s."
+    duration_secs: 16
+    countdown_from: 3
+    mark: { key: setpoint, label: "E2 — ~2500 RPM neutral" }
+
+  - prompt: "Back to idle, hands off."
+    duration_secs: 6
+
+  - prompt: "Bring engine to ~3500 RPM. Hold steady through the 12 s."
+    duration_secs: 16
+    countdown_from: 3
+    mark: { key: setpoint, label: "E3 — ~3500 RPM neutral" }
+
+  - prompt: "Back to idle, hands off."
+    duration_secs: 6
+
+  - prompt: "Bring engine to ~4500 RPM. Hold steady through the 12 s."
+    duration_secs: 16
+    countdown_from: 3
+    mark: { key: setpoint, label: "E4 — ~4500 RPM neutral" }
+
+  - prompt: "Back to idle, hands off."
+    duration_secs: 6
+
+  - prompt: "Bring engine to ~5500 RPM. Hold steady through the 12 s. DO NOT exceed 6500 RPM in neutral."
+    duration_secs: 16
+    countdown_from: 3
+    mark: { key: setpoint, label: "E5 — ~5500 RPM neutral" }
+
+  - prompt: "Back to idle, hands off. Final settle before shutdown."
+    duration_secs: 8
+
+  # ----------------------------------------------------------- Shutdown
+  - prompt: "Kill switch → STOP. Let decay finish."
+    duration_secs: 12
+    countdown_from: 3
+    mark: { key: kill, label: "kill switch" }
+
+  - prompt: "Key OFF when silent. Hold 3 s of tail silence."
+    duration_secs: 6
+
+  - prompt: "Done. Press q to stop capture and fill in session.md."
+    duration_secs: null

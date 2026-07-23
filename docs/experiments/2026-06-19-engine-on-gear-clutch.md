@@ -133,4 +133,4 @@ If a gear refuses to engage, mark it: `g` to indicate the attempt, then immediat
 - If gears 2–6 confirm and the sentinel is documented, [[signal-gear-position]] is `confirmed`. This closes the gear question for the dashboard MVP.
 - If clutch is still invisible engine-on, open a brief ADR in `docs/decisions/` noting that the dashboard project will treat clutch as a hardware input (separate sensor), not a bus signal, and stop hunting for it on this stub.
 - If `541` D6 turns out to be runtime / temperature / something interesting, promote it to its own finding.
-- The engine-on stationary input experiment ([`2026-06-18-engine-on-stationary-inputs.md`](2026-06-18-engine-on-stationary-inputs.md)) is independent and can run in either order relative to this one. Doing them in the same warm-up session is efficient (warm engine once) but produces a dense set of captures — be disciplined about labels.
+- The engine-on stationary input work has since been split into [[2026-07-12-dash-inputs]] and [[2026-07-12-neutral-rpm-sweep]] — either is independent of this file and can run in any order.

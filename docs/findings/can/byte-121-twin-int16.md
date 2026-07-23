@@ -4,9 +4,46 @@ status: provisional
 established_by:
   - 2026-06-17-engine-idle-baseline-x3
   - 2026-06-23-engine-driven-rear-spin
+  - 2026-07-22-first-moving-ride
 references:
   - ktm-can-decoder
 ---
+
+# `121` D0:D1 and D2:D3 — twin signed int16 channels
+
+> **2026-07-22 rolling-load update — leading hypothesis is now signed engine torque (or a signed torque-derived correction).** The paddock-stand data made these channels look like a bounded engine-on wobble peaking around 3500 RPM at +7 LSB. Real riding shows a much bigger, cleaner shape that the paddock stand couldn't produce:
+>
+> - **Overrun (throttle 0 %, RPM > idle) → strongly negative**, magnitude grows with RPM: -16 at 3500 RPM, -18 at 4000 RPM, -20 at 4500 RPM, -23 at 5000 RPM. Engine being spun by the wheels through a closed throttle — negative net engine torque.
+> - **Idle → near zero** (unchanged from the earlier finding: A μ ≈ +0.7, σ ≈ 1.4 in 1500-2000 RPM 0-8-throttle bin across 3699 rolling-ride frames).
+> - **Drive → positive, monotonic with throttle at fixed RPM**. Example, 4500-5000 RPM bin: -20 at 0 % throttle → 0 near ~7 % → +59 at ~38 % throttle. Zero-crossing throttle grows with RPM (7 % at 4500, higher at 5500) — the "throttle needed to balance zero net torque" moves with RPM.
+> - **A and B track within ~1 LSB across every rolling-ride bin.** Almost identical, unlike the r=0.6-0.96 disparity in the paddock corpus. Under real load they're either the same quantity broadcast twice or two views of the same computation.
+> - **Peak observed magnitude ~ 75** at 5500-6000 RPM, ~ 47 % throttle. Svartpilen 401 spec peak torque ≈ 37 N·m — so if these are torque at 0.5 N·m/LSB the peak matches the physical spec. Provisional but suggestive.
+>
+> **Hypotheses re-ranked:**
+> 1. **Signed engine torque / brake mean effective pressure** (was not on the original list). Fits every rolling-ride observation. Sign flip on drive/overrun is the strongest evidence; a bounded fuel-trim or ignition-advance signal doesn't naturally sign-flip on overrun.
+> 2. Ignition advance corrections (originally #1). Still possible but doesn't naturally produce the sign-flip pattern under overrun.
+> 3. Short-term + long-term fuel trim (originally #2). Downweight — fuel cutoff on decel would produce specific overrun behaviour but not the smooth signed continuum we see.
+> 4. Closed-loop control feedback (originally #3). Not obviously torque-shaped.
+>
+> **The "not load-driven" claim below (paddock-stand Phase A rear-spin) is retracted.** Paddock-stand drivetrain drag is a tiny load compared to real riding (no wind, no acceleration inertia, no gradient); a "load ruled out" verdict on that data was inadequate. This finding's ninth section preserves the original claim for historical continuity — read with the retraction in mind. The rolling-ride analysis is in `scripts/first_moving_ride_load_scan.py`.
+>
+> **New promote-to-confirmed criterion:** if the two channels really are signed torque, a controlled coast-down capture (throttle closed, bike coasting from high RPM to idle) should produce a smooth monotonic curve from a strongly-negative value at high-RPM overrun through zero at idle. Also plausibly correlates with instantaneous fuel-injection duration if that ever surfaces on the bus.
+>
+> ---
+>
+> **Second independent corroboration (2026-07-22 shift-cut analysis).** During the ~ 60 ms quickshifter ignition cut ([[signal-quickshifter]] `121 D6 bit 0`), the ECU stops combustion. If `121_A` is torque, that instantaneous absence of combustion should produce a sharp drop in the channel — combustion was producing positive torque, remove combustion, only drivetrain drag / pumping losses remain (negative). Test on the 2026-07-22 corpus, partitioned by rider intensity at the shift moment (`scripts/first_moving_ride_torque_during_cut.py`):
+>
+> | Shift group | n | Pre-cut `121_A` μ | In-cut min `121_A` μ | Δ |
+> |-------------|---:|-------------------:|---------------------:|---:|
+> | **Aggressive** (rider ON throttle through cut, pre-cut A > +30) | 3 | +88 | -38 | **-126 LSB** |
+> | Neutral (rider between, -10 < pre-cut < +30) | 5 | +8 | +9 | +1 LSB |
+> | All 31 upshifts (rider intent varies) | 31 | -17 | -28 (min per shift) | -12 LSB |
+>
+> Individual aggressive shifts: pre +94 → cut -39 (moving-1 3→4, drop 133); pre +90 → cut -38 (moving-1 4→5, drop 128); pre +79 → cut -37 (moving-2 2→3, drop 116).
+>
+> **The correlation with rider intensity is the discriminator, not just the magnitude.** If `121_A` were RPM-derived, ignition-derived, or throttle-derived, the ~60 ms cut wouldn't produce a 130 LSB dip conditioned on the pre-cut throttle-on state — RPM barely moves in 60 ms, ignition is a pulse-timing signal not a bulk value, and the rider's throttle grip doesn't change *during* the cut. Only a signal that responds to instantaneous combustion (torque, MAP, or fuel-injection quantity) would show this pattern. Torque is the cleanest fit because it goes NEGATIVE during the cut (drag, no combustion) — MAP and injection quantity would go to zero but not below.
+>
+> Physical spot-check: at LSB ~ 0.25 N·m/LSB (the working hypothesis), the +90 → -38 swing is +22.5 N·m → -9.5 N·m = 32 N·m delta. Svartpilen 401 spec peak torque is 37 N·m. The magnitude of instantaneous drive torque interrupted by the cut lands right in the expected physical range.
 
 # `121` D0:D1 and D2:D3 — twin signed int16 channels
 
@@ -113,8 +150,8 @@ The two-channels-correlated-but-not-identical pattern is the strongest evidence 
 
 The encoding (twin int16 BE) is essentially confirmed; the **physical quantity** is what needs more work. Promotion path:
 
-1. **Phase E of [[2026-06-18-engine-on-stationary-inputs]]** — matched-RPM neutral setpoints will show whether the B3 peak survives without load. If the peak is RPM-keyed it reproduces in neutral; if throttle/load-keyed it shifts or disappears.
-2. **Throttle-blip transient analysis** from the same Phase E session — fast throttle transitions show whether the channels lead/lag throttle vs RPM, which discriminates between ignition-correction and fuel-trim-style hypotheses (ignition advance updates per ignition event, ~fast; fuel trims have integrator delay, ~slow).
+1. **Phase E of [[2026-07-12-neutral-rpm-sweep]]** — matched-RPM neutral setpoints will show whether the B3 peak survives without load. If the peak is RPM-keyed it reproduces in neutral; if throttle/load-keyed it shifts or disappears.
+2. **Throttle-blip transient analysis** from Phase D of the same experiment — fast throttle transitions show whether the channels lead/lag throttle vs RPM, which discriminates between ignition-correction and fuel-trim-style hypotheses (ignition advance updates per ignition event, ~fast; fuel trims have integrator delay, ~slow).
 3. **External documentation** — Bosch ME17 / motorcycle-ECU service tool data parameter lists would settle the semantic interpretation in one shot if a public source can be found.
 
 ## Evidence

@@ -15,9 +15,9 @@ Index of decoded signals and per-ID payload coverage on the 2020 Husqvarna Svart
 | gear_position | `129` | D0 bits 7:4 enum (N, 1–6) | confirmed | [signal-gear-position](../findings/can/signal-gear-position.md) |
 | clutch | `129` | D0 bit 3 bool | confirmed | [signal-clutch](../findings/can/signal-clutch.md) |
 | shift_failed | `129` | D0 bit 1 bool | provisional | [signal-shift-failed](../findings/can/signal-shift-failed.md) |
-| wheel_speed_front | `12D` | D0:D1 bits 15:4, 12-bit BE, 1/12 km/h | confirmed | [signal-wheel-speed-front](../findings/can/signal-wheel-speed-front.md) |
-| rear_speed_27kmh_flag | `12D` | D1 bit 0 | provisional | [signal-12d-d1-bit0](../findings/can/signal-12d-d1-bit0.md) |
-| wheel_speed_rear | `12D` | D5:D6 BE u16, 1/16 km/h | confirmed | [signal-wheel-speed-rear](../findings/can/signal-wheel-speed-rear.md) |
+| wheel_speed_front | `12D` | D0:D1 bits 15:4, 12-bit BE, 1/10 km/h | provisional | [signal-wheel-speed-front](../findings/can/signal-wheel-speed-front.md) |
+| rear_speed_band | `12D` | D1 low nibble (bits 3:0), 4-bit uint, 25 km/h step | provisional | [signal-12d-d1-bit0](../findings/can/signal-12d-d1-bit0.md) |
+| wheel_speed_rear | `12D` | D5:D6 BE u16, ~0.0565 km/h | provisional | [signal-wheel-speed-rear](../findings/can/signal-wheel-speed-rear.md) |
 | warmup_index | `540` | D1 u8 (interpretation under review) | provisional | [signal-warmup-index](../findings/can/signal-warmup-index.md) |
 | side_stand | `540` | D3 bit 0 bool | confirmed | [signal-side-stand](../findings/can/signal-side-stand.md) |
 | coolant_temp | `540` | D5:D6 BE u16, 0.1 °C | confirmed | [signal-coolant-temp](../findings/can/signal-coolant-temp.md) |
@@ -26,6 +26,11 @@ Index of decoded signals and per-ID payload coverage on the 2020 Husqvarna Svart
 | engine_off_counter | `541` | D6 u8, 8-bit mod-256, ~1 Hz | confirmed | [signal-engine-off-counter](../findings/can/signal-engine-off-counter.md) |
 | kill_switch (redundant mirror) | `121` | D5 bit 2 | confirmed | [signal-kill-switch](../findings/can/signal-kill-switch.md) |
 | kill_switch (redundant mirror) | `5B0` | D0 bit 4 | confirmed | [signal-kill-switch](../findings/can/signal-kill-switch.md) |
+| abs_lamp | `12A` | D0 b4, D1 b0, D5 b3 (each HIGH=lit) | provisional | [signal-abs-lamp](../findings/can/signal-abs-lamp.md) |
+| 12A_d1_b2 (semantics open) | `12A` | D1 bit 2 | provisional | [signal-12a-d1-bit2](../findings/can/signal-12a-d1-bit2.md) |
+| abs_lamp (mirror) | `12E` | D6 bits 4, 5 (each LOW=lit) | provisional | [signal-abs-lamp](../findings/can/signal-abs-lamp.md) |
+| shift_cut_active | `121` | D6 bit 0 (ECU ignition cut for any shift; QS-vs-clutched ambiguous) | provisional | [signal-quickshifter](../findings/can/signal-quickshifter.md) |
+| shift_blip_active | `121` | D6 bit 1 (down-shift auto-blip) | provisional | [signal-quickshifter](../findings/can/signal-quickshifter.md) |
 
 ### Decoded but unattributed (encoding known, physical quantity not)
 
@@ -52,17 +57,17 @@ Cell legend:
 
 | ID    | period | D0 | D1 | D2 | D3 | D4 | D5 | D6 | D7 |
 |-------|-------:|----|----|----|----|----|----|----|----|
-| `120` |  20 ms | S rpm hi | S rpm lo | S throttle | 0 | ? | ? | ? | h |
-| `121` |  20 ms | S intA hi | S◐ intA lo + es b5,b7 | S intB hi | S intB lo | ? | S◐ kill-dup b2 + es b3 | ? | h |
-| `129` |  20 ms | S◐ gear b7:4, clutch b3, shift-failed b1 (b0,b2 ?) | ? | ? | ? | ? | ? | ? | h |
-| `12A` |  50 ms | ? | ? | ? | ? | ? | ? | ? | h |
-| `12D` |  10 ms | S frontWS hi | S◐ frontWS hi-nib + 27 km/h flag b0 (b1–3 = 0) | dup coarse rear-speed mirror, 1/10 km/h | S◐ frontWS-mirror hi (observed 0, unexercised < 12.7 km/h) | dup frontWS-mirror lo, 3/64 km/h | S rearWS hi | S rearWS lo | h |
-| `12E` |  20 ms | ? | ? | ? | ? | ? | ? | ? | h |
-| `450` |  50 ms | ? static | ? static | ? static | ? static | ? static | ? static | ? static | 0 |
-| `540` | 100 ms | ? | S warmup-index | S◐ es b6 | S◐ side-stand b0 + es b4 (b5–7 = 0) | ? | S coolant hi | S coolant lo | 0 |
-| `541` |  20 ms | ? | ? | S◐ kill-switch b4 | ? | S engine-on counter b0–6 (b7 reserved) | ? | S engine-off counter | h |
-| `5A0` | 100 ms | ? | ? | ? | ? | ? | ? | ? | h |
-| `5B0` | 100 ms | S◐ kill-dup b4 | ? | ? | ? | ? | ? | ? | h |
+| `120` |  20 ms | S rpm hi | S rpm lo | S throttle | 0 | 0 | 0 | 0 | h |
+| `121` |  20 ms | S intA hi | S◐ intA lo + es b5,b7 | S intB hi | S intB lo | ? static (0x04) | S◐ kill-dup b2 + es b3 | S◐ shift-cut b0 + shift-blip b1 | h |
+| `129` |  20 ms | S◐ gear b7:4, clutch b3, shift-failed b1 (b0,b2 = 0) | 0 | 0 | ? static (0x01) | 0 | 0 | 0 | h |
+| `12A` |  50 ms | S◐ abs-lamp b4 | S◐ abs-lamp b0 + d1-b2 (semantics open) | 0 | 0 | 0 | S◐ abs-lamp b3 | 0 | h |
+| `12D` |  10 ms | S frontWS hi | S◐ frontWS hi-nib + rear-speed band lo-nib (b0-3) | dup coarse rear-speed mirror, 1/10 km/h | dup frontWS-mirror hi (u16 BE at ~0.0577 km/h) | dup frontWS-mirror lo | S rearWS hi | S rearWS lo | h |
+| `12E` |  20 ms | 0 | 0 | 0 | 0 | 0 | 0 | S◐ abs-lamp mirror b4, b5 | h |
+| `450` |  50 ms | 0 | 0 | 0 | 0 | 0 | 0 | ? static (0x28 constant) | 0 |
+| `540` | 100 ms | 0 | S warmup-index | S◐ es b6 | S◐ side-stand b0 + es b4 (b5–7 = 0) | 0 | S coolant hi | S coolant lo | 0 |
+| `541` |  20 ms | 0 | 0 | S◐ kill-switch b4 | S◐ time-bin 0/1/2 | S engine-on counter (full uint8 mod-256) | 0 | S engine-off counter | h |
+| `5A0` | 100 ms | 0 | 0 | 0 | 0 | ? static (0x04 latched at engine-start) | 0 | 0 | h |
+| `5B0` | 100 ms | S◐ kill-dup b4 (b0-3, b5-7 = 0) | 0 | 0 | 0 | 0 | 0 | 0 | h |
 
 `es` = engine-state bit (semantics open, see [engine-state-bits-decay-shape](../findings/can/engine-state-bits-decay-shape.md)).
 
@@ -72,22 +77,23 @@ After the 2026-06-30 corpus sweep:
 
 | Category | Bytes | %  |
 |---|---:|---:|
-| Carries a primary signal (S or S◐) | 23 | 26 % |
+| Carries a primary signal (S or S◐) | 28 | 32 % |
 | Structural D7 hash (h)             |  9 | 10 % |
-| Always-zero across 14 sessions (0) |  3 |  3 % |
-| Redundant mirror of decoded signal (dup) | 2 | 2 % |
-| Undecoded (?)                      | 51 | 58 % |
+| Always-zero across 15 sessions (0) | 44 | 50 % |
+| Static non-zero constant           |  4 |  5 % |
+| Redundant mirror of decoded signal (dup) | 3 | 3 % |
+| Undecoded (?)                      |  0 |  0 % |
 
 Whole-ID status:
 
-- **All 8 payload bytes (D0..D6) untouched**: `12A`, `12E`, `5A0` — 3 of 11 IDs have no extracted signal at all. The 2026-06-30 sweep narrowed each of these from "8 unknown bytes" to **exactly one moving byte** across the 14-session corpus: `12A` D1, `12E` D6, `5A0` D4. The other 18 bytes between them read a single value in every captured condition.
-- **All 7 payload bytes frozen across every captured condition**: `450` — payload has never moved, so we can't say *anything* about it from passive listening. Some rider input we haven't exercised must move it (or it's UDS-only).
+- **No ID left with zero attributed bytes.** `12A` and `12E` now carry ABS-lamp bits per [[signal-abs-lamp]] (2026-07-22). `5A0` has D4 latched at 0x04, all other bytes now confirmed always-zero across the 15-session corpus — no primary signal, but structure is characterised.
+- **`450` payload static-frozen at fixed values** (D0-D5 = 0x00, D6 = 0x28, D7 = 0). Never moved across any captured condition including the full 2026-07-22 real-riding corpus. Some rider input we haven't exercised must move it (or it's UDS-only).
 
 ## How to read "what's missing"
 
 Bit-counting the unknowns is misleading — a single undecoded byte could carry one byte-wide quantity, or eight independent flags, or any mix. What we can say:
 
-- **The unknowns are bounded above by 51 bytes** (the `?` cells) plus the uncharted bits inside the 23 `S◐` cells, plus whatever lies latent under the 3 always-zero bytes. No new arbitration ID will arrive: 800 679 frames across 14 sessions span every condition exercised and surface zero IDs outside the documented 11. The 2026-06-30 corpus sweep ([[2026-06-30-unknown-byte-corpus-sweep]]) classified the unknowns as **46 GLOBAL-STATIC** (a single value across every captured frame — likely reserved unless a not-yet-exercised input flips them), **13 UNEXPLAINED-ACTIVE** (move across sessions, no known-signal correlation passed |r| ≥ 0.9; 14 originally, one closed by the post-sweep `541` D6 → engine-off counter promotion), and **2 INSUFFICIENT-DATA** (move in only one session).
+- **Zero undecoded bytes remain — a first.** Down from 51 pre-2026-07-22. Uncharted structure now lives entirely inside the `S◐` cells (bits within partially-decoded bytes) and the 44 always-zero bytes (which could carry latent signals under untested inputs). No new arbitration ID will arrive: 800 679 + 386 271 frames across 15 sessions span every condition exercised and surface zero IDs outside the documented 11.
 - **No UDS / diagnostic side-channel.** Signals that only respond to UDS request (likely candidates: fuel level, odometer, fault codes — see [fuel-consumption-absent-from-broadcasts](../findings/can/fuel-consumption-absent-from-broadcasts.md), [battery-voltage-absent-from-always-on-broadcasts](../findings/can/battery-voltage-absent-from-always-on-broadcasts.md)) won't surface in passive captures regardless of how many bytes we work through.
 - **Always-zero is not the same as empty.** [byte-encoding-12-in-16](../findings/can/byte-encoding-12-in-16.md) shows a low nibble that read clean-zero engine-off and carried a real signal engine-on. A `0` cell becomes a `?` the first time an untested input flips it.
 

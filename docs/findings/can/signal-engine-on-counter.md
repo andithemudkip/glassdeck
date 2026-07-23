@@ -4,15 +4,18 @@ status: confirmed
 established_by:
   - 2026-06-21-bit-transition-scan
   - 2026-06-23-engine-driven-rear-spin
+  - 2026-07-22-first-moving-ride
 ---
 
-# Engine-running seconds counter — `541` D4 bits 0..6
+# Engine-running seconds counter — `541` D4 (uint8)
 
-`541` byte D4, low 7 bits, is a **7-bit modulo-128 engine-running seconds counter**. It ticks at ~1 Hz whenever the engine is running and is frozen engine-off. Bit 7 has never toggled in any observed session and is treated as reserved.
+`541` byte D4 is a **full 8-bit uint8 modulo-256 engine-running seconds counter**. It ticks at ~1 Hz whenever the engine is running and is frozen engine-off.
 
 ```
-seconds_mod_128 = data[4] & 0x7F     # 0..127, wraps every 128 s
+seconds_mod_256 = data[4]             # 0..255, wraps every 256 s
 ```
+
+> **2026-07-22 update — bit 7 is not reserved.** Original finding claimed 7-bit modulo-128 because bit 7 never toggled in any pre-2026-07-22 session. That was because every previous engine-on session was shorter than ~ 128 s from engine-start. The moving-ride corpus caught D4 crossing 128 four times: moving-1 at t+108.7 s (D4 = 128), moving-3 starts at D4 = 143 (bit 7 already high mid-count), moving-4 first bit-7 at t+50.4 s, moving-5 first bit-7 at t+68.3 s. Peak observed D4 = 255 with natural wrap-through to 0 — a full uint8 counter, not a 7-bit one. See [`scripts/first_moving_ride_qs_bit_probe.py`](../../../scripts/first_moving_ride_qs_bit_probe.py) tail output (the byte was surfaced en passant during the fan-status hunt in [[fan-status-absent-from-broadcasts]]).
 
 Update rate (of the broadcast): 100 ms (the period of `541` — see [[always-on-broadcast-ids]]). The counter's *value* only increments once a second; the byte is rebroadcast at the ID's period in between.
 

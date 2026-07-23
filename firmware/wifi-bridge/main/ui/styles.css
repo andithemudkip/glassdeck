@@ -75,11 +75,11 @@
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    display: flex; justify-content: space-between;
+    display: flex; align-items: center;
     gap: 8px;
   }
   .sig .meta .name { color: var(--dim); }
-  .sig .meta .loc  { color: var(--dim); opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sig .meta .loc  { color: var(--dim); opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: auto; }
   .sig .row {
     display: flex; align-items: baseline;
     gap: 6px;
@@ -425,4 +425,128 @@
   @media (prefers-reduced-motion: reduce) {
     .sig .val, .sig .fresh { transition: none; }
     .sig .val.pulse { color: var(--fg); }
+  }
+
+  /* -------------------------------------------------------------------------
+     Edit mode: hide/show + drag-reorder chrome. Controls are display:none
+     outside edit mode so the resting live view is unchanged. All hit targets
+     sized ≥ 28px on their long side for touch comfort.
+     ------------------------------------------------------------------------- */
+  .sig .grip, .sig .hide-btn { display: none; }
+  .sig.hidden { display: none; }
+
+  body.edit-mode .sig {
+    outline: 1px dashed var(--hair);
+    outline-offset: -1px;
+  }
+  body.edit-mode .sig.hidden { display: flex; opacity: 0.35; }
+  body.edit-mode .sig.dragging {
+    opacity: 0.55;
+    outline: 1px dashed var(--accent);
+    outline-offset: -1px;
+    pointer-events: none;
+  }
+  body.edit-mode .sig .grip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 24px;
+    min-height: 24px;
+    margin-right: 4px;
+    color: var(--dim);
+    cursor: grab;
+    letter-spacing: -1px;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+  }
+  body.edit-mode .sig .grip:active { cursor: grabbing; }
+  body.edit-mode .sig .hide-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 24px;
+    min-height: 24px;
+    margin-left: 4px;
+    padding: 0;
+    background: transparent;
+    color: var(--dim);
+    border: 1px solid var(--hair);
+    border-radius: 3px;
+    font-family: inherit;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  body.edit-mode .sig .hide-btn:hover { color: var(--err); border-color: var(--err); }
+
+  /* Edit chrome bar — mirrors #captureBar's visual language. */
+  #editBar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 8px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--hair);
+    min-height: 36px;
+    font-size: 12px;
+    color: var(--dim);
+  }
+  #editBar[hidden] { display: none; }
+  #editBar > .k {
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 10px;
+    margin-right: 4px;
+  }
+  #editBar #hiddenChips {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+    min-width: 0;
+  }
+  #editBar .chips-empty { color: var(--dim); opacity: 0.5; padding: 0 4px; }
+  #editBar .chip {
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid rgba(241, 181, 0, 0.4);
+    border-radius: 14px;
+    padding: 4px 10px;
+    font-family: inherit;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    cursor: pointer;
+    min-height: 28px;
+  }
+  #editBar .chip:hover { border-color: var(--accent); }
+  #editBar .spacer { flex: 1 1 auto; }
+  #editBar button.ghost,
+  #editBar button.primary {
+    background: var(--bg);
+    color: var(--fg);
+    border: 1px solid var(--dim);
+    border-radius: 3px;
+    padding: 4px 12px;
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    min-height: 28px;
+  }
+  #editBar button.ghost { border-color: var(--hair); color: var(--dim); }
+  #editBar button.ghost:hover { color: var(--fg); border-color: var(--dim); }
+  #editBar button.primary { border-color: var(--accent); color: var(--accent); }
+
+  /* Edit button in the capture bar: mild accent when active. */
+  #captureBar #editBtn.active { color: var(--accent); border-color: var(--accent); }
+
+  @media (max-width: 420px) {
+    #editBar { padding: 6px; }
+    #editBar .chip { min-height: 32px; }
   }

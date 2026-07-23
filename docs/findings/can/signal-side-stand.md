@@ -50,7 +50,7 @@ Combined with the kill-switch finding ([[signal-kill-switch]]), the pattern acro
 
 ## Open
 
-- Engine-on confirmation. Bit position should be unchanged once the engine is up; verify alongside the other engine-on stationary inputs ([[2026-06-18-engine-on-stationary-inputs]]).
+- Engine-on confirmation. Bit position should be unchanged once the engine is up; falls out of [[2026-07-12-neutral-rpm-sweep]] as a passive check on the long idle-settled window.
 - True sensor-to-bus latency. Not measured here (the press-to-flip figure is dominated by rider mistiming / stand travel time). If ever load-bearing for the dashboard, a synthetic ground-truth mark on the stand would pin it down — otherwise the working assumption is "within one `540` broadcast period, like the kill switch".
 - ~~`540` D3 hi nibble is unidentified.~~ Resolved by [[2026-06-21-engine-state-bit-attribution]]: at idle, the only moving bit in the hi nibble is **bit 4**, which is an engine-state-derived flag (engine-off mode = 1, idle mode = 0). Bits 5, 6, 7 of D3 are static `0`. The complete idle decomposition is `D3 = (bit 0 = side stand) | (bit 4 = engine-state, unattributed — see [[engine-state-bits-decay-shape]])`. The "stuck at `0x1`" reading throughout this engine-off capture is consistent: bike not running → bit 4 = 1, contributing the hi-nibble `0x1`. Any future capture showing a third moving bit in `540` D3 is a new signal.
 

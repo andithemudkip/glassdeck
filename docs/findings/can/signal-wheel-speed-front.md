@@ -1,123 +1,122 @@
 ---
 area: can
-status: confirmed
+status: provisional
 established_by:
   - 2026-06-24-front-wheel-hand-spin
   - 2026-06-24-front-wheel-decay-mark
+  - 2026-07-22-first-moving-ride
+supersedes_claim:
+  - "LSB 1/192 km/h/raw = 1/12 km/h on the 12-bit extract (was low-speed-corpus artifact)"
+  - "full uint16 BE at ~1/162 km/h (my own intermediate rewrite on 2026-07-22 morning — undone once the D1 low-nibble semantics were understood)"
 references:
   - ktm-can-decoder
 ---
 
 # Front wheel speed — `12D` D0 + D1 high nibble (12-bit BE)
 
-Front wheel speed on the 2020 Husqvarna Svartpilen 401 is broadcast in arbitration ID **`0x12D`** as a 12-bit big-endian value occupying **D0 (all 8 bits) + D1 high nibble (bits 4-7)**. The low nibble of D1 (bits 0-3) carries *other* signals — see [[signal-12d-d1-bit0]] for the engine-correlated flag in bit 0.
-
-| Field | Encoding | Scale | Behaviour |
-|------:|----------|-------|-----------|
-| **D0 + D1 high nibble** | 12-bit BE (D0 = high 8 bits, D1[4:7] = low 4 bits) | **exactly 1/192 km/h per raw-u16 LSB** = 1/12 km/h per effective transmitted step | Primary signal. `0` at rest. ECU snaps to `0` below ~2.33 km/h (does not transmit intermediate low values). |
+Front wheel speed on the 2020 Husqvarna Svartpilen 401 is broadcast in arbitration ID **`0x12D`** at **D0 (all 8 bits) + D1 high nibble (bits 7:4) as a 12-bit big-endian value**, LSB **~ 1/10 km/h per extracted 12-bit value** (equivalently ~ 1/160 km/h on the raw u16 (D0<<8)|D1). Working LSB anchored empirically at ~ 1/10.15 across the ride corpus; expected to snap to exactly 1/10 with a dash-verified moving procedure.
 
 ```python
-# Correct: mask off the low nibble first
-front_wheel_kmh = ((data[0] << 8) | (data[1] & 0xF0)) / 192.0
-# Equivalent (extract the 12-bit value, then scale)
-front_wheel_kmh = ((data[0] << 4) | (data[1] >> 4)) / 12.0
+speed_field_12bit = ((data[0] << 8) | (data[1] & 0xF0)) >> 4
+front_wheel_kmh = speed_field_12bit / 10.0
+# Equivalently on the raw u16:
+front_wheel_kmh = ((data[0] << 8) | (data[1] & 0xF0)) / 160.0
 ```
 
-**Do NOT decode as a plain `(D0 << 8) | D1` uint16** — that's correct only when D1's low nibble is zero, which is true engine-off but not always engine-on (see [[signal-12d-d1-bit0]]).
+**Do mask off the low 4 bits of D1** for wheel-speed decoding. The low nibble is a *separate* 4-bit field carrying a rear-wheel-speed-band indicator — see [[signal-12d-d1-bit0]] for the semantic. Reading D0:D1 as a plain uint16 (unmasked) rounds the wheel-speed reading incorrectly *and* mixes in the band signal.
 
-Same arbitration ID as the rear wheel ([[signal-wheel-speed-rear]]), different bytes, **different LSB family** — rear is 1/16 km/h, front is 1/192 km/h. See § "Front and rear use different LSBs (intentional)" below. A *third* wheel-speed encoding lives at D3:D4 on the same ID as a redundant 16-bit BE mirror at 3/64 km/h LSB — see [[byte-12d-d3-d4-front-mirror]].
+Same arbitration ID as the rear wheel ([[signal-wheel-speed-rear]]), different bytes, different LSB — rear is ~ 0.0565 km/h/LSB on a full uint16, front is 1/10 km/h/LSB on a 12-bit field. A separate redundant front-wheel-speed **mirror** lives at D3:D4 on the same ID — see [[byte-12d-d3-d4-front-mirror]] (LSB re-fit needed given the LSB revision here).
 
-## Evidence
+## History of this finding
 
-### Encoding pattern: speed value is 12 bits at the top of the slot
+Three iterations to converge on the correct encoding:
 
-Across all 47 573 frames of [[2026-06-24-front-wheel-hand-spin]] and all 56 000+ frames of [[2026-06-24-front-wheel-decay-mark]] (engine-off in both), **every non-zero raw value of `(D0 << 8) | D1` is a multiple of 16**. The low 4 bits of D1 never set in engine-off conditions. Observed broadcast values span the set `{448, 464, 480, 496, 512, 528, 544, 560, 576, 592, 608, …}` — strictly 16 apart.
+1. **2026-06-24 (original, `confirmed`).** 12-bit-in-16-bit, LSB 1/12 km/h on the extracted value. Correct on the *structure* (12-bit BE in the high 12 bits, low nibble is a separate field) but wrong on the LSB — the "raw 1344 ⇔ dash 7" hand-spin fit was distinguishable only within dash-quantisation slop between 1/12 and 1/10.
+2. **2026-07-22 morning rewrite (undone).** "Full uint16 BE at ~ 1/162 km/h/LSB." Wrong on the structure — I saw the D1 low nibble non-zero on 72-89 % of moving frames and concluded the whole u16 must be speed, missing that the low nibble is a band field with a clean speed-dependent value. Right coincidentally on the LSB, because ~ 1/162 on raw u16 ≈ ~ 1/10 on the 12-bit extract.
+3. **2026-07-22 afternoon (this version, `provisional`).** Correct structure (original 12-bit split) + correct LSB (1/10, not 1/12). Verified by inspecting raw D0:D1 vs decoded rear across the ride corpus.
 
-In the engine-driven session ([[2026-06-23-engine-driven-rear-spin]]) the low 4 bits **do** flip — specifically D1 bit 0 is set occasionally — but never combined with a non-zero D0:D1 high portion (the front wheel was stationary on the paddock stand the whole time). The high-12-bit field stays at 0 in that capture; the bit-0 flag is the *only* low-nibble activity. So:
+The lesson embedded here is worth preserving: **a low-nibble that appears active isn't proof that the encoding is a full uint16** — the low nibble can still be a separate field with a speed-correlated value. Distinguishable only by tabulating the low nibble against speed (as this finding now does).
 
-- **Wheel speed** uses bits 15:4 of the BE u16. 12-bit value, LSB 1/192 km/h on the raw u16 (equivalently 1/12 km/h on the 12-bit extracted value).
-- **Low nibble** (bits 3:0) is **not padding** — it's a separate field. See [[signal-12d-d1-bit0]] for the one bit currently known to carry information.
+## Evidence — LSB 1/10 on the 12-bit extract
 
-See [[byte-encoding-12-in-16]] for the broader detection-pattern note.
+Per-frame sample from `scripts/first_moving_ride_12d_d1_probe.py` across all 5 moving-ride files (first frame in each rear-speed bin where the bike was actually moving):
 
-### LSB calibration against the OEM speedo
+| Rear km/h (from D5:D6) | Raw D0:D1 u16 | 12-bit extract (raw >> 4) | Front km/h at LSB 1/10 |
+|-----------------------:|--------------:|--------------------------:|-----------------------:|
+| 5.0 | 960 | 60 | 6.0 |
+| 10.1 | 1712 | 107 | 10.7 |
+| 15.1 | 2448 | 153 | 15.3 |
+| 20.1 | 3280 | 205 | 20.5 |
+| 25.1 | 4097 | 256 | 25.6 |
+| 30.0 | 4849 | 303 | 30.3 |
+| 35.1 | 5633 | 352 | 35.2 |
+| 40.2 | 6433 | 402 | 40.2 |
+| 45.0 | 7281 | 455 | 45.5 |
+| 50.3 | 8082 | 505 | 50.5 |
+| 55.1 | 8898 | 556 | 55.6 |
+| 60.1 | 9650 | 603 | 60.3 |
+| 65.2 | 10402 | 650 | 65.0 |
+| 70.3 | 11218 | 701 | 70.1 |
+| 75.0 | 12035 | 752 | 75.2 |
+| 80.2 | 12835 | 802 | 80.2 |
+| 85.3 | 13795 | 862 | 86.2 |
+| 90.1 | 14499 | 906 | 90.6 |
+| 95.0 | 15171 | 948 | 94.8 |
+| 100.1 | 16068 | 1004 | 100.4 |
 
-Per-push peak raw (BE uint16) on D0:D1 vs the rider-reported dash km/h peak across two sessions, decoded at LSB = 1/192 km/h:
+Front decoded values are systematically ~ 0.3-1.0 km/h higher than concurrent rear decoded values across the range. That's roughly consistent with either (a) real rear tyre being slightly larger effective radius than front (making rear turn fewer rev/km) or (b) small residual mis-calibration on either LSB. Not big enough to distinguish a real physical difference from a rounding-slop artefact; both are consistent with LSB = 1/10 on front.
 
-| Session, Push | Dash km/h | Raw u16 peak | raw/192 | Match? |
-|---------------|----------:|-------------:|--------:|--------|
-| 06-24 hand-spin A | 3 | 608 | 3.17 | ✓ rounds to 3 |
-| 06-24 hand-spin A | 3 | 608 | 3.17 | ✓ |
-| 06-24 hand-spin A | 3 | 640 | 3.33 | ✓ |
-| 06-24 hand-spin A | 4 | 752 | 3.92 | ✓ rounds to 4 |
-| 06-24 hand-spin B | 7 | 1344 | **7.00** | ✓ exact |
-| 06-24 hand-spin B | 9 | 1712 | 8.92 | ✓ rounds to 9 |
-| 06-24 hand-spin B | 10 | 1840 | 9.58 | ✓ rounds to 10 |
-| 06-24 hand-spin B | 11 | 1856 | 9.67 | ✗ rounds to 10, not 11 |
-| 06-24 hand-spin C | 5 | 896 | 4.67 | ✓ rounds to 5 |
+Cross-check with the corpus's binary-friendly-LSB expectation: rear best-fit is ~ 0.0565 km/h, not a clean fraction; front best-fit is 1/10 = 0.1, a clean decimal. The two channels *don't* share a clean-fraction style, so the Bosch-uses-binary-fractions argument from the original finding was wrong. Bosch mixed decimal and non-decimal on the same ID.
 
-8/9 pushes match within ±0.5 km/h (the dash's quantisation step). The remaining outlier — dash "11" with raw 1856 — is not explainable by any single LSB: the constraints "raw 1344 → dash 7" and "raw 1856 → dash 11" don't overlap on any LSB value, because raw 1856 / 1344 = 1.38 but dash 11 / 7 = 1.57. The rider [explicitly noted](../experiments/2026-06-24-front-wheel-hand-spin.md) that per-push attribution of dash peaks was approximate at the time of recall, so the most likely explanation is that the dash actually peaked at 10 on this push and 11 belonged to a different push whose peak raw was not the absolute-maximum frame sampled. Documented as a known residual.
+## Front/rear ratio — corrected reading of the constant
 
-### ECU low-end broadcast cutoff at raw 448
+The `first_moving_ride.py` analysis reported a rock-solid front/rear ratio of 0.762 across the whole speed range. That was under old-LSBs (front 1/192, rear 1/16). Under corrected LSBs (front 1/10, rear ~ 0.0565):
 
-[[2026-06-24-front-wheel-decay-mark]] captured the decay tail of 5 hand-spin pushes. **Every single push** has its last non-zero raw value equal to exactly **448 = 0x01C0** before the byte snaps to `0x0000` for the rest of the decay. The ECU stops broadcasting non-zero values below `448 / 192 = 2.333 km/h`.
+- decoded_front / decoded_rear = (raw_front_12bit / 10) / (raw_rear_u16 * 0.0565)
+- Empirically raw_front_12bit / raw_rear_u16 ≈ 9.144 / 16 = 0.572 (I was previously dividing by u16 not by the 12-bit extract; the extract divides raw u16 by 16, hence /16)
+- decoded ratio = 0.572 / (10 * 0.0565) = 0.572 / 0.565 ≈ 1.01 ✓
 
-Per-push last-non-zero raw before the b-mark:
+Both channels agree on decoded km/h to ~ 1 % once the encoding and LSBs are right. That's the sanity check the previous rewrite couldn't produce.
 
-| Push | Last raw | Time before b-mark |
-|-----:|---------:|-------------------:|
-| 1 | 448 | 486 ms |
-| 2 | 448 | 456 ms |
-| 3 | 448 | 425 ms |
-| 4 | 448 | 446 ms |
-| 5 | 448 | 217 ms |
+## ECU low-end broadcast floor still holds
 
-The 200-500 ms gap between the bus going quiet and the rider's `b` press is consistent with reaction time *plus* the dash's own display-update latency (the rider was pressing `b` when the *dash* flipped to 0, which lags the bus going to zero by however long the dash holds its previous reading).
+[[2026-06-24-front-wheel-decay-mark]] pinned the ECU broadcast floor at raw 448 = 0x01C0 (D0=0x01, D1=0xC0). At LSB 1/10 on the 12-bit extract, `448 >> 4 = 28`, decoded = 2.8 km/h. So the ECU stops broadcasting non-zero front-wheel speed below ~ 2.8 km/h — consistent with the rider's decay-session observation that "dash briefly displays 2, never 1" (dash-2 band is [1.5, 2.5), and the ECU floor at 2.8 km/h leaves only a brief flash inside the dash-2 window before the ECU snaps to 0).
 
-### Dash quantisation rule corroborates 1/192
+## Front and rear use different LSBs (intentional)
 
-In the decay-mark session, the rider observed **dash briefly displays "2" km/h, never "1"**, before flipping to 0. With LSB 1/192 and ECU floor at raw 448:
+Rear D5:D6 is a full uint16 at ~ 0.0565 km/h/LSB. Front D0:D1 top 12 bits at 1/10 km/h/LSB.
 
-- The lowest non-zero ECU broadcast is raw 448 = 2.333 km/h.
-- Round-to-nearest dash would display "2" for true ∈ [1.5, 2.5), "1" for true ∈ [0.5, 1.5), "0" otherwise.
-- The ECU never broadcasts low enough to register dash "1" (would need true < 1.5, ECU floor is 2.33).
-- The ECU does broadcast at 2.333 km/h (raw 448) and 2.417 km/h (raw 464), both within dash-2 band.
-- Above 2.5 km/h the dash flips to "3", which takes about 30-50 ms of decay at typical observed rates — matching the rider's "briefest moment" observation.
+| | Rear D5:D6 | Front D0:D1[15:4] |
+|---|-----------|-------------------|
+| LSB | ≈ 0.0565 km/h | 0.1 km/h (= 1/10) |
+| Effective bits | full uint16 | 12-bit |
+| Max representable | ~ 3700 km/h | 409.5 km/h |
+| Coarse mirror on same ID | D2 at 0.1 km/h | D3:D4 at (LSB pending, see [[byte-12d-d3-d4-front-mirror]]) |
+| ECU floor | not observed | raw 448 = 2.8 km/h |
+| Auxiliary field in the slot | none | D1 low nibble = rear-speed band ([[signal-12d-d1-bit0]]) |
 
-The dash thus uses **round-to-nearest with an additional rule of suppressing display below ~1.5 km/h**, and the ECU's broadcast floor cuts off most of the dash-2 band, leaving only a brief flash.
-
-## Why front and rear use different LSBs (intentional, not noise)
-
-Rear D5:D6 is `1/16 km/h per LSB` (uint16, full 16-bit resolution). Front D0:D1 is `1/192 km/h per LSB` (12-bit value in 16-bit slot, low 4 bits padded).
-
-| | Rear D5:D6 | Front D0:D1 |
-|---|-----------|--------------|
-| LSB | 1/16 km/h | 1/192 km/h |
-| Effective resolution | 16-bit (full uint16) | 12-bit (high 12 bits of u16) |
-| Coarse mirror? | yes — D2 at 1/10 km/h | none |
-| Has a low-end ECU cutoff? | not observed (idle in 1st gear sits at raw 162 = 10.1 km/h) | yes, snaps to 0 below raw 448 |
-
-Both are calibrated km/h values, but with different resolutions and conventions — likely because they're consumed by different ECU subsystems (front by the ABS module which wants finer-grained data for slip detection; rear by the engine ECU which is happy with 1/16 km/h for gear/ignition logic). The pulse-per-time hypothesis (front byte being a raw counter rather than km/h) is **disproven** by the clean LSB fit at 1/192 km/h and the binary-friendly 12-bit-in-16-bit encoding.
+Front's ~ 10× coarser LSB probably reflects the ABS module's use of front-wheel signal for slip detection — 0.1 km/h resolution across 0-410 km/h is enough for that. Rear is finer because the engine-side logic (auto-headlight threshold, ignition maps) benefits from tighter resolution at lower speeds.
 
 ## Cross-walk vs KTM
 
-KTM's ktm-can decoder ([reference](../../references/ktm-can-decoder.md)) places front wheel speed at `12B` D0:D1 BE uint16 on the 2020 KTM 690 Enduro R. On the Svartpilen 401:
+KTM's ktm-can decoder places front wheel speed at `12B` D0:D1 BE uint16 on the 2020 KTM 690 Enduro R. On the Svartpilen 401:
 
-- **ID relocated** `12B` → `12D` (same 10 ms period). Consistent with the rear-channel pattern.
-- **Byte position preserved exactly** — front wheel at D0:D1, BE uint16. The 12-bit-in-16-bit packing is likely a Bosch-wide convention; KTM may use the same.
-- **LSB scale not assumed** without confirming against KTM data — Bosch ECU variants vary even when byte positions are preserved (coolant temp scale matches across variants; front-wheel LSB might or might not).
+- **ID relocated** `12B` → `12D`.
+- **Byte position preserved exactly** — front wheel in D0 + D1 high bits.
+- **12-bit-in-16-bit packing preserved from KTM likely.** KTM decoder documents "uint16" but doesn't call out whether the low nibble is used — worth cross-checking against KTM 690 data if it exists.
+- **LSB scale differs** from what KTM's decoder documented. Not unusual; Bosch variants differ per-model.
 
 ## Evidence
 
-- [[2026-06-24-front-wheel-hand-spin]] — established the byte location and gave a noisy LSB best-fit ~1/190.
-- [[2026-06-24-front-wheel-decay-mark]] — pinned LSB at 1/192 via the 12-bit encoding observation, the ECU floor at raw 448, and the dash 0/2/3 quantisation rule. Promoted finding to `confirmed`.
-- [`scripts/front_wheel_hand_spin.py`](../../../scripts/front_wheel_hand_spin.py) — per-push analysis (sessions 1 and 2).
-- [`scripts/front_wheel_decay_mark.py`](../../../scripts/front_wheel_decay_mark.py) — decay-tail analysis, low-end distribution, dash quantisation cross-check.
+- [[2026-06-24-front-wheel-hand-spin]] — engine-off, hand-spin 2-10 km/h; original 12-bit structure identification.
+- [[2026-06-24-front-wheel-decay-mark]] — ECU floor at raw 448.
+- [[2026-07-22-first-moving-ride]] — real-motion corpus that revealed the D1 low-nibble is a rear-speed-band field (not part of the wheel-speed encoding, not just noise) and pinned the LSB at 1/10 km/h.
+- [`scripts/first_moving_ride_12d_d1_probe.py`](../../../scripts/first_moving_ride_12d_d1_probe.py) — the per-speed-band raw-value dump that revealed the encoding.
 
 ## Open
 
-- **Origin of the dash-11 outlier** in session 1, push 8. Most likely a recall artifact; no LSB family explains it cleanly. Closed-or-irrelevant for practical decoding — the LSB is pinned at 1/192 with strong corroboration from three independent angles.
-- **What lives in the low 4 bits of D1.** Bit 0 carries an engine-correlated flag ([[signal-12d-d1-bit0]], `provisional`). Bits 1-3 still always `0` in everything observed.
-- **Does the rear also use 12-bit-in-16-bit packing?** Rear D5:D6 sweep on [[2026-06-23-engine-driven-rear-spin]] needs a quick check — if rear is full 16-bit, the front 12-bit packing is a deliberate per-channel choice; if rear is also 12-bit, then 1/16 km/h × 16 = 1 km/h per step on the rear (would mean the rear's effective resolution is 1 km/h, contradicting the 0.05633 best-fit). Cheap follow-up: scan the rear capture for raw values modulo 16.
+- **Absolute LSB — 1/10 exactly, or close?** Empirical best-fit lands 1/10.11 to 1/10.20. Most likely 1/10 exactly with a small residual front-tyre-diameter-vs-rear calibration offset baked into the ratio-of-decodes. The dash-verified moving procedure will pin it to ~ 0.3 % using multiple steady-state holds; until then treat "front km/h = 12-bit extract / 10" as the working formula and note ± 1 % uncertainty.
+- **Whether the low nibble of D1 is derived from rear speed or vehicle speed or something else.** See [[signal-12d-d1-bit0]] — the finding's own Open questions cover this.
+- **D3:D4 mirror LSB re-fit** — [[byte-12d-d3-d4-front-mirror]] had its 3/64 LSB fit against the old canonical decode; needs re-fitting against 1/10.
 
-See also: [[signal-wheel-speed-rear]], [[byte-encoding-12-in-16]], [[always-on-broadcast-ids]], [[ktm-can-decoder]], [[dash-warning-lights]].
+See also: [[signal-wheel-speed-rear]], [[byte-12d-d3-d4-front-mirror]], [[signal-12d-d1-bit0]], [[always-on-broadcast-ids]], [[ktm-can-decoder]], [[dash-warning-lights]].

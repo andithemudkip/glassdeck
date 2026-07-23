@@ -148,20 +148,20 @@
   notes: "Transient flag fired ~1.5s after a shift attempt that didn't engage. Likely source of the OEM dash '-' glyph. Evidence base is narrow (single Phase B session, 2 events)."
 
 - name: wheel_speed_rear
-  status: confirmed
+  status: provisional
   finding: signal-wheel-speed-rear
   arbitration_id: 0x12D
   bytes: [5, 6]
   byte_order: big
   bit_length: 16
   encoding: uint
-  scale: 0.0625
+  scale: 0.0565
   offset: 0
   unit: "km/h"
-  notes: "1/16 km/h per LSB (best-fit slope 0.05633 across the engine-driven sweep; ~10% gap to 0.0625 attributed to back-of-envelope KTM 390 gearing × tyre circumference, pending OEM-speedo cross-check). D2 is a coarse mirror of the same speed at ~1/10 km/h that wraps at 25.5 km/h — not registered here (use D5:D6 as the source of truth). D3 stays 0x00 (not a high byte for D2)."
+  notes: "LSB ~0.0565 km/h converges across engine-driven best-fit (0.05633) and two rider-dash calibration points on 2026-07-22-first-moving-ride (0.05649 dash-101; 0.05682 dash-60). Full uint16 BE (rear D6 low nibble non-zero on 93.3-93.9% of moving frames — no bit-fielded structure). D2 is a coarse mirror at ~1/10 km/h that wraps at 25.5 km/h; D3 stays 0x00 (not a high byte for D2). Final anchor to ±1% pending a dash-verified moving procedure."
 
 - name: wheel_speed_front
-  status: confirmed
+  status: provisional
   finding: signal-wheel-speed-front
   arbitration_id: 0x12D
   bytes: [0, 1]
@@ -169,10 +169,71 @@
   bit_offset: 4
   bit_length: 12
   encoding: uint
-  scale: 0.08333333333333333
+  scale: 0.1
   offset: 0
   unit: "km/h"
-  notes: "12-bit BE value packed into the high 12 bits of D0:D1 (D0 = high 8 bits, D1 high nibble = low 4 bits). Low nibble of D1 carries other fields — see signal-12d-d1-bit0. LSB = 1/12 km/h on the extracted 12-bit value (equivalently 1/192 km/h on the raw u16). ECU snaps to 0 below ~2.33 km/h (raw 448) — does not transmit intermediate low values."
+  notes: "12-bit BE value in the high 12 bits of D0:D1 (D0 = high 8 bits, D1 high nibble = low 4 bits). LSB = 1/10 km/h on the extracted 12-bit value (equivalently ~1/160 km/h on the raw u16). D1 LOW nibble is a separate 4-bit rear-speed band field — see signal-12d-d1-bit0; MUST mask D1 & 0xF0 for wheel-speed. ECU snaps to 0 below raw 448 (2.8 km/h). Original 2026-06-24 finding claimed LSB 1/12 (dash-quantisation-noise-away from 1/10); an intermediate 2026-07-22 morning rewrite mis-claimed a full uint16 at 1/162 — undone same day once the D1 low-nibble band structure was understood. From 2026-07-22-first-moving-ride."
+
+- name: signal_12a_d1_bit2
+  status: provisional
+  finding: signal-12a-d1-bit2
+  arbitration_id: 0x12A
+  byte: 1
+  bit_offset: 2
+  bit_length: 1
+  encoding: bool
+  notes: "Semantics open. Not the ABS lamp (dropped from abs_lamp bit-set on 2026-07-22 after historical cross-check). Rises 0→1 at ~t+2s of key-on (ECU/module init handshake). Later transitions vary by session — flips in 2026-06-24 front-wheel hand-spin engine-off where the ABS lamp stayed lit, so it's carrying something else. Candidate meanings: ignition-armed / start-permission bit, kill-switch or side-stand mirror at inverted polarity, or module heartbeat. From signal-12a-d1-bit2 finding."
+
+- name: shift_cut_active
+  status: provisional
+  finding: signal-quickshifter
+  arbitration_id: 0x121
+  byte: 6
+  bit_offset: 0
+  bit_length: 1
+  encoding: bool
+  values:
+    0: "off"
+    1: "cut"
+  notes: "ECU-issued ignition cut during a gear shift. Fires ~40 ms BEFORE the gear enum steps and lasts median 60 ms (range 20-200 ms). Fires on 100% of observed real up- and downshifts. Cannot distinguish quickshifter from clutched shifts on this bike's data because the clutch-lever switch is unreliable (see signal-clutch and project-clutch-sensor-unreliable memory). Zero out-of-window firings (0.46% duty; every 'on' frame is inside a shift). From 2026-07-22-first-moving-ride."
+
+- name: shift_blip_active
+  status: provisional
+  finding: signal-quickshifter
+  arbitration_id: 0x121
+  byte: 6
+  bit_offset: 1
+  bit_length: 1
+  encoding: bool
+  values:
+    0: "off"
+    1: "blip"
+  notes: "Auto-blip active — fires only on downshifts, alongside shift_cut_active. Byte value 0x03 (bits 0+1) = downshift, 0x01 (bit 0 only) = upshift. Whether the ECU auto-blips on rider-clutched downshifts too can't be resolved from this bike's data (unreliable clutch signal). From 2026-07-22-first-moving-ride."
+
+- name: time_bin_541_d3
+  status: provisional
+  finding: signal-541-d3-time-bin
+  arbitration_id: 0x541
+  byte: 3
+  bit_length: 8
+  encoding: uint
+  scale: 1
+  offset: 0
+  unit: bin
+  notes: "3-state monotonic counter (observed values {0,1,2}), walks ~5 min per state since engine start, resets to 0 on key-cycle. Physical quantity open — likely ECU warmup-stage counter or coarse elapsed-time bin. From 2026-07-22-first-moving-ride."
+
+- name: rear_speed_band
+  status: provisional
+  finding: signal-12d-d1-bit0
+  arbitration_id: 0x12D
+  byte: 1
+  bit_offset: 0
+  bit_length: 4
+  encoding: uint
+  scale: 25
+  offset: 0
+  unit: "km/h (band lower edge)"
+  notes: "4-bit rear-speed band field = floor(rear_kmh / 25). Redundant — derivable from wheel_speed_rear. Supersedes the earlier interpretation as a 27 km/h flag on bit 0 alone: the flag was the LSB of this integer field. High nibble of D1 (bits 7:4) is part of wheel_speed_front. Peak band observed = 4 (rear peak 108 km/h)."
 
 - name: engine_on_counter
   status: confirmed
@@ -180,12 +241,25 @@
   arbitration_id: 0x541
   byte: 4
   bit_offset: 0
-  bit_length: 7
+  bit_length: 8
   encoding: uint
   scale: 1
   offset: 0
   unit: s
-  notes: "Engine-running seconds counter, 7-bit modulo 128 (wraps every 128 s). Rate confirmed constant ~1 Hz from idle to ~5500 RPM via the engine-driven rear-spin capture — not an engine-cycle / fuel-injection counter. Bit 7 reserved (never toggled). Frozen engine-off."
+  notes: "Engine-running seconds counter, full uint8 modulo 256 (wraps every 256 s). Rate confirmed constant ~1 Hz from idle to ~5500 RPM via the engine-driven rear-spin capture — not an engine-cycle / fuel-injection counter. Bit 7 IS part of the counter (was mis-classified as 'reserved' in the original finding because pre-2026-07-22 sessions never ran > 128 s from engine-start); 2026-07-22-first-moving-ride caught natural rollover at D4 = 255 → 0. Frozen engine-off."
+
+- name: abs_lamp
+  status: provisional
+  finding: signal-abs-lamp
+  arbitration_id: 0x12A
+  byte: 0
+  bit_offset: 4
+  bit_length: 1
+  encoding: bool
+  values:
+    0: OFF
+    1: LIT
+  notes: "ABS warning lamp. HIGH = lit (key-on default), LOW = extinguished (self-test complete). Extinguishes at first front-wheel > 6 km/h crossing with engine running, on each fresh key-on cycle. Redundantly broadcast at 12A D1 bit 0, 12A D5 bit 3 (all same polarity), and inverted at 12E D6 bits 4 and 5 (LOW = lit). All 5 agree; use any one as source of truth. NOTE: 12A D1 bit 2 was included in an earlier draft but demoted after historical cross-check — see signal-12a-d1-bit2. From 2026-07-22-first-moving-ride."
 
 - name: engine_off_counter
   status: confirmed

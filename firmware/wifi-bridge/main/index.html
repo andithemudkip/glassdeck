@@ -39,6 +39,15 @@
   <span class="spacer"></span>
   <button id="filesBtn" class="ghost" type="button" hidden>Files</button>
   <button id="exportBtn" type="button" hidden>Export</button>
+  <button id="editBtn" class="ghost" type="button" title="Customize live view">Edit</button>
+</div>
+
+<div id="editBar" hidden>
+  <span class="k">hidden</span>
+  <span id="hiddenChips"></span>
+  <span class="spacer"></span>
+  <button id="resetLayoutBtn" class="ghost" type="button">Reset</button>
+  <button id="editDoneBtn" class="primary" type="button">Done</button>
 </div>
 
 <main id="mid"></main>
@@ -56,6 +65,8 @@
 
 <script>
 (() => {
+/* __INCLUDE: ui/prefs.js */
+
 /* __INCLUDE: ui/state.js */
 
 /* __INCLUDE: ui/decoder.js */

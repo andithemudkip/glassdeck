@@ -97,7 +97,7 @@ The latency probe (first `540` frame after each `j` whose D3 bit 0 differs from 
 
 - [x] Write [`docs/findings/can/signal-side-stand.md`](../findings/can/signal-side-stand.md) at `confirmed`.
 - [x] Update [`docs/references/ktm-can-decoder.md`](../references/ktm-can-decoder.md): side-stand is `540` D3 bit 0 on Husqvarna (KTM has D4 bit 0). Polarity matches.
-- [ ] Confirm with engine running — included implicitly in the engine-on stationary batch ([[2026-06-18-engine-on-stationary-inputs]]); the bit should remain at `540` D3 bit 0 and not be re-routed once the engine is up.
+- [ ] Confirm with engine running — falls out of [[2026-07-12-neutral-rpm-sweep]] as a passive check on the long idle-settled window; the bit should remain at `540` D3 bit 0 and not be re-routed once the engine is up.
 - [ ] Sensor-to-bus latency. Not measured here — the press-to-flip figure is dominated by rider mistiming and stand travel time. If we ever need a real number (e.g., to validate dashboard interlock logic against the OEM cluster's response time), the cheapest path is a synthetic ground-truth mark on the stand fed into a free GPIO; until then the working assumption is "within one `540` broadcast period, like the kill switch".
 - [ ] Bit 4 of `540` D3 is unidentified. It is static-1 throughout this capture and was static-1 in idle baselines too. Note for the bus-wide bit catalogue.
 

@@ -53,8 +53,8 @@ This is indistinguishable from a real fuel signal at the rider's interface, but 
 
 ## Consequences for the replacement dashboard
 
-  - **Fuel consumption signal closes as derived-locally.** We compute `Avg Fuel Consumption ≈ ∫(RPM × throttle × flow_const) dt` over a sliding window using the already-decoded RPM and throttle signals. No additional CAN reverse-engineering needed.
-  - **`flow_const` is one number, calibrated against tank-fill deltas** on the first few rides post-deployment. Refines from a starting estimate as miles accumulate.
+  - **Fuel consumption signal closes as derived-locally.** We compute it from already-decoded CAN channels. The specific model has moved (2026-07-22) from `∫(RPM × throttle) dt` to a torque-based `∫(RPM × max(0, 121_A)) dt` — see [[fuel-consumption-derivation-from-torque]]. Change was driven by `121_A` being identified as leading-candidate signed engine torque, which gives (a) physical grounding (torque × RPM = mechanical power = fuel × combustion efficiency), and (b) automatic decel fuel-cut modelling (`121_A` goes negative during overrun; clipped to zero → no fuel). The old `RPM × throttle` plan is preserved in [[project-fuel-consumption-derivation]] memory's Older section.
+  - **Calibration constants (2, unchanged from the old plan) refined against tank-fill deltas** on the first few rides post-deployment.
   - **Fuel level is a separate concern** — see [[project-fuel-on-can]]: the tank sender is expected to be on the harness, not on CAN. Needs its own hardware tap if we want a level reading rather than just a consumption-derived range estimate.
   - **No further fuel-on-CAN experiments.** If a fuel-shaped byte ever surfaces incidentally during future engine-on captures, that would refute and reopen.
 

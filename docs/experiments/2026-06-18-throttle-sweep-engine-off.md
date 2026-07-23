@@ -26,7 +26,7 @@ Three KTM hypotheses converge on the throttle input:
 2. **`12A` D0 bit 1 = throttle-open flag** (1 = open, 0 = closed). The byte read static `0x10` at idle (bit 4 set, bit 1 clear) — consistent with the throttle being closed. Cracking the throttle should flip bit 1 to 1; releasing should flip it back. Hysteresis is plausible — the flag may engage at a finite grip angle, not the first 1/256.
 3. **`12A` D1 bit 6 = requested map / ride-by-wire state.** `12A` D1 was LOW-CARD(2) at idle, value flipping between two states. KTM ties bit 6 to map selection. With the engine off and the throttle moving, bit 6 may not change — or it may, if the ECU re-evaluates the requested map whenever pedal position changes. Either outcome is informative.
 
-Doing the sweep **engine off** isolates the throttle-position channel from RPM and torque feedback. With the engine off, `120` D0,D1 (RPM) is `0x0000` — so any byte that moves with the throttle in this capture is throttle-related, not RPM-driven. Engine-on confirmation comes later in [2026-06-18-engine-on-stationary-inputs](2026-06-18-engine-on-stationary-inputs.md).
+Doing the sweep **engine off** isolates the throttle-position channel from RPM and torque feedback. With the engine off, `120` D0,D1 (RPM) is `0x0000` — so any byte that moves with the throttle in this capture is throttle-related, not RPM-driven. Engine-on confirmation comes later in [2026-07-12-neutral-rpm-sweep](2026-07-12-neutral-rpm-sweep.md).
 
 ## Setup
 
@@ -73,7 +73,7 @@ Slow ramps are the prize — they make `120` D2 sweep through every value cleanl
 
 ## Follow-ups
 
-- Engine-on throttle blip (in [2026-06-18-engine-on-stationary-inputs](2026-06-18-engine-on-stationary-inputs.md)) to confirm the engine-off decoding holds engine-on and to probe `12A` D1 bit 6 again.
+- Engine-on throttle blip (in [2026-07-12-neutral-rpm-sweep](2026-07-12-neutral-rpm-sweep.md), Phase D) to confirm the engine-off decoding holds engine-on; `12A` D1 bit 6 is re-probed there and (via the mode toggle in [2026-07-12-dash-inputs](2026-07-12-dash-inputs.md), Phase A).
 - If `120` D2 encoding is non-linear, that's a `docs/findings/can/` entry on its own — important for the dashboard's throttle gauge.
 
 ## Result (2026-06-19)
@@ -92,7 +92,7 @@ Analysis re-derivable with `python scripts/throttle_sweep.py`.
 
 ### Hypothesis 3 — `12A` D1 bit 6 = requested map / RBW state
 
-**Unconfirmed (as predicted).** Bit is 0 across all 994 `12A` frames in the capture, all three phases. The hypothesis predicted this might happen with the engine off (the ECU may not re-evaluate map state when not running); re-test in [2026-06-18-engine-on-stationary-inputs](2026-06-18-engine-on-stationary-inputs.md).
+**Unconfirmed (as predicted).** Bit is 0 across all 994 `12A` frames in the capture, all three phases. The hypothesis predicted this might happen with the engine off (the ECU may not re-evaluate map state when not running); re-test in [2026-07-12-dash-inputs](2026-07-12-dash-inputs.md) (Phase A mode toggle) and [2026-07-12-neutral-rpm-sweep](2026-07-12-neutral-rpm-sweep.md) (Phase D blips).
 
 ### Bonus hypothesis that surfaced mid-analysis: `120` D7 = APP2 (dual-sensor pedal)
 

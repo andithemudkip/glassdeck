@@ -1,26 +1,72 @@
 ---
 area: can
-status: provisional
+status: confirmed
 established_by:
   - 2026-06-24-front-wheel-hand-spin
   - 2026-06-24-front-wheel-decay-mark
   - 2026-06-30-unknown-byte-corpus-sweep
+  - 2026-07-22-first-moving-ride
+supersedes_claim:
+  - "LSB 3/64 km/h (was fit against the old-canonical-decode of front wheel)"
+  - "D3 always 0x00 (was a corpus artefact — front wheel never got above 12.7 km/h before 2026-07-22)"
 ---
 
 # `12D` D3:D4 — redundant 16-bit big-endian front-wheel-speed mirror
 
-`12D` D3:D4 is a second front-wheel-speed broadcast at a different scale to the canonical wide field at D0:D1. Best-fit encoding is **D3:D4 BE u16 at exactly 3/64 km/h per LSB** (≡ 64/3 ≈ 21.333 LSB per km/h), with the same snap-to-zero behaviour as [[signal-wheel-speed-front]]. D3 has been static `0x00` across every captured condition because the front wheel never exceeded ~12 km/h, so the encoding is so far only confirmed on the low byte D4.
+`12D` D3:D4 is a second front-wheel-speed broadcast — same physical quantity as the canonical [[signal-wheel-speed-front]] at D0:D1, but with its own encoding scale. Refit against the 2026-07-22 corpus (n = 92 827 frames across the 0-102 km/h range):
 
 | Field | Encoding | Scale | Behaviour |
 |------:|----------|-------|-----------|
-| **D3:D4** | 16-bit BE u16 (D3 = high byte, D4 = low byte) | **0.046875 km/h per LSB** = 3/64 km/h | `0` at rest. Snaps to `0` below ~2.3 km/h (same threshold as the wide D0:D1 field). D3 = 0x00 observed in all captures because front wheel < 12.7 km/h cap of D4 alone. |
+| **D3:D4** | 16-bit BE u16 (D3 = high byte, D4 = low byte) | **≈ 0.0577 km/h per LSB** (≈ 1/17.34, working best-fit; not a clean fraction) | `0` at rest. Snaps to `0` in lockstep with the canonical decode. Now exercised across the full 0-102 km/h range; D3 walks 0..6, both bytes carry information. |
 
 ```python
-# Decode (low byte already saturates the byte at ~12.7 km/h — D3 needed above that)
-front_mirror_kmh = ((data[3] << 8) | data[4]) * 0.046875
+front_mirror_kmh = ((data[3] << 8) | data[4]) * 0.0577    # working ± ~1% until dash-verified anchor
 ```
 
-The canonical front-wheel-speed source remains [[signal-wheel-speed-front]] (D0:D1, 1/12 km/h LSB on the extracted 12-bit value). D3:D4 is a redundant mirror — same value at coarser resolution, similar in spirit to how D2 carries the coarse rear-speed mirror noted in [[signal-wheel-speed-rear]].
+The canonical front-wheel-speed source remains [[signal-wheel-speed-front]] (D0:D1, 12-bit at 1/10 km/h). D3:D4 is a redundant mirror at a *different* LSB — same km/h reading, different byte-level scale.
+
+## Evidence — 2026-07-22 refit
+
+Prior fit used LSB 3/64 km/h/LSB against the pre-2026-07-22 canonical decode of front wheel speed (which was ~1/192 km/h/LSB on the raw u16 view). Both the canonical LSB and the mirror LSB have been corrected. Using the corrected canonical (12-bit at 1/10 km/h):
+
+- **n = 92 827 12D frames** across the 5-file moving corpus, spanning canonical decoded front speed 0.00-102.20 km/h and raw D3:D4 values 0-1764.
+- **OLS fit:** `canonical_kmh = 0.0576724 × raw_D3D4 + 0.2176`
+- **Pearson r = 0.99997332** — essentially a perfect line.
+- **RMS residual = 0.245 km/h** — sub-quarter-km/h across the whole speed range.
+
+Candidate LSB check (each holding intercept at the OLS-optimum for that slope):
+
+| Slope tried | RMS residual (km/h) |
+|-------------|--------------------:|
+| **0.0577 (this fit)** | **0.245** |
+| 1/16 = 0.0625 | 2.82 |
+| 1/20 = 0.0500 | 4.47 |
+| 3/64 = 0.046875 (old finding) | 6.29 |
+| 1/12 = 0.0833 | 14.93 |
+
+The fit lands cleanly on ~ 0.0577 (= ~ 1/17.34). Not a clean small-integer fraction, but Bosch clearly used non-clean LSBs elsewhere on this bike (rear D5:D6 sits at ~ 0.0565 = ~ 1/17.7 — same rough magnitude). The old finding's clean 3/64 was a fit against the wrong canonical; the working data always supported ~ 0.0577.
+
+## D3 activation confirms multi-byte structure
+
+D3 was static `0x00` across every pre-2026-07-22 session because front wheel speed never exceeded ~ 12.7 km/h (D4-alone saturates at ~ 14.7 km/h at LSB 0.0577). The moving corpus takes the bike to 102 km/h, exercising D3 through values 0..6:
+
+| Speed bin | Typical D3 | Typical D4 | Combined raw |
+|-----------|:----------:|:----------:|:------------:|
+| 0-15 km/h | 0 | 0-200 | 0-260 |
+| 15-30 km/h | 1 | 50-200 | 290-465 |
+| 30-45 km/h | 2 | 45-190 | 555-740 |
+| 45-60 km/h | 3 | 50-180 | 820-1000 |
+| 60-75 km/h | 4 | 55-195 | 1075-1255 |
+| 75-90 km/h | 5 | 55-170 | 1335-1520 |
+| 90-102 km/h | 6 | 65-210 | 1600-1745 |
+
+D3 increments by 1 approximately every 256 D4 counts, i.e., every 14.8 km/h — exactly what a 16-bit BE u16 predicts. The finding's Open question "Confirm D3 high-byte behaviour" (from the 2026-06-30 corpus-sweep era) is now closed.
+
+## Encoding was correct; scale had to shift
+
+The original 2026-06-24 finding's structural claim ("D3:D4 is a 16-bit BE mirror of front wheel speed at some finer scale than D0:D1's canonical") holds. The specific LSB (3/64) was fit against a canonical that was subsequently rewritten. The finding's method — compute Pearson r vs canonical, fit slope — still works; just needs re-running when the canonical changes.
+
+**Lesson embedded here:** mirror LSBs are always downstream of the canonical LSB. When the canonical is provisional, mirror LSBs are provisional too. This finding was `provisional` for that reason; with both canonical and mirror now on the same 2026-07-22 corpus, the mirror upgrades to `confirmed` on the encoding and `provisional` on the exact LSB (same dash-verified-procedure dependency as [[signal-wheel-speed-front]]).
 
 ## Evidence — encoding
 
@@ -55,50 +101,26 @@ The fit lands cleanly on `3/64`, not on either of the other wheel-speed scales a
 
 ## Snap-to-zero behaviour
 
-D4 = `0x00` for every frame where `wheel_speed_front` decodes to `0`. The minimum non-zero D4 value observed across both sessions is `33`, which decodes to `33 × 0.046875 + 0.795 ≈ 2.34 km/h` — matching the wide field's snap threshold at raw 448 (≡ 2.333 km/h) from [[signal-wheel-speed-front]] to within quantisation. Both fields share the same threshold and snap together.
-
-| `wheel_speed_front` (km/h) | D4 range observed | D4 median per bin |
-|---|---|---:|
-| 0 | `{0x00}` only | 0 |
-| 2 – 3 | 33 – 67 | 40 – 58 |
-| 4 – 5 | 68 – 110 | 75 – 99 |
-| 6 – 7 | 111 – 152 | 121 – 143 |
-| 8 – 9 | 153 – 195 | 163 – 183 |
-| 10 | 196 – 201 | 197 |
-
-D4 monotonic across the full speed range observed; no wrap detected. Bin-median residual ≤ 1 LSB at every bin.
-
-## Why D3 is reported as observed-zero, not reserved
-
-D3 = `0x00` across every frame of every captured session, and the unknown-byte sweep initially classified it as a static-zero byte. After the D4 encoding is locked, D3 is better read as the **high byte of an unexercised 16-bit slot**:
-
-- D4 alone saturates at `0xFF × 0.046875 + 0.795 ≈ 12.74 km/h`. Above that, the encoding must overflow into D3.
-- Every front-wheel-active session in the current corpus is hand-spin or decay — front wheel maxes out at ~10 km/h observed. No engine-driven front-wheel-active session exists (those are all rear-spin on the paddock stand with the front stationary).
-- A live-bike capture that gets the front wheel above ~12.7 km/h is the cheapest discriminator. Decoding `((D3 << 8) | D4) × 0.046875` should track `wheel_speed_front` (D0:D1) one-to-one through and past the rollover.
-
-Until that capture exists, **the encoding is confirmed on D4 only**; the multi-byte structure is a strong hypothesis but not yet observed.
+D3:D4 snaps to `0x0000` in lockstep with the canonical [[signal-wheel-speed-front]] D0:D1. Both fields share the ECU's low-speed broadcast floor: below the floor threshold both read exactly 0; above it both track linearly.
 
 ## What this rules out
 
-- **`12D` D4 is not throttle-derived, RPM-derived, or coolant-derived.** The corpus sweep tested all known references; only front wheel speed exceeded |r| = 0.9, and it did so at r ≈ 0.998 in two independent sessions.
-- **D4 is not the same encoding as D2 (rear coarse mirror).** D2 wraps at 25.5 km/h with 0.1 km/h LSB; D4 has a different slope and shows no wrap signature in the observed range. Three wheel-speed scales on the same ID.
-- **D4 is not a redundant copy of the wide D0:D1 12-bit field.** Different slope (3/64 vs 1/12) and different byte position. Independent broadcast, same input quantity.
-
-## Status
-
-**Provisional.** D4 encoding confirmed (r ≈ 0.9999, residual σ ≈ ½ LSB across two independent engine-off sessions). Multi-byte D3:D4 structure is the leading hypothesis but D3 itself remains observed-zero until a higher-speed front-wheel capture confirms rollover.
+- **`12D` D3:D4 is not throttle-derived, RPM-derived, or coolant-derived.** The corpus sweep tested all known references; only front wheel speed exceeded |r| = 0.9, and it did so at r ≈ 0.998 in the original engine-off sessions and r ≈ 0.99997 in the 2026-07-22 corpus.
+- **D3:D4 is not the same encoding as D2 (rear coarse mirror).** D2 wraps every 25.5 km/h at 0.1 km/h LSB; D3:D4 spans 0-102 km/h monotonically without wrapping.
+- **D3:D4 is not a redundant copy of the canonical D0:D1 12-bit field.** Different LSB (0.0577 vs 0.1 km/h/LSB on the extract) and different byte position. Independent broadcast, same input quantity.
 
 ## Open
 
-- **Confirm D3 high-byte behaviour.** First on-bike rolling capture above ~13 km/h on the front wheel will either confirm `((D3 << 8) | D4) × 0.046875` decoding or reveal a different overflow scheme (saturation at 0xFF, wraparound, separate counter).
-- **Why three scales on one ID?** Different downstream consumers (canonical D0:D1 → speedo; D3:D4 → ?; D2 → coarse rear). Worth noting but doesn't block the dashboard MVP — only the canonical D0:D1 is needed for display.
-- **Promote to `signals.yaml`** once D3 is confirmed.
+- **Absolute LSB anchor.** Currently anchored to the corrected canonical decode of front wheel speed (which is itself provisional at ± ~ 1 %). A dash-verified moving procedure or GPS ride will pin both simultaneously.
+- **Why three wheel-speed scales on one ID?** Different downstream consumers (canonical D0:D1 → speedo; D3:D4 → possibly ABS module; D2 → coarse rear reference for something). Doesn't block anything.
 
 ## Evidence
 
-- [[2026-06-24-front-wheel-hand-spin]] — engine-off, hand-spin pushes 2–10 km/h.
-- [[2026-06-24-front-wheel-decay-mark]] — engine-off, hand-spin + decay tail.
-- [[2026-06-30-unknown-byte-corpus-sweep]] — flagged the correlation and ran the encoding fit.
-- [`scripts/id12d_d4_characterise.py`](../../../scripts/id12d_d4_characterise.py) — characterisation script (linear fit, slope candidates, wrap diagnostic).
+- [[2026-06-24-front-wheel-hand-spin]] — engine-off, hand-spin pushes 2-10 km/h. Established the D4 correlation on the low-speed regime.
+- [[2026-06-24-front-wheel-decay-mark]] — engine-off, hand-spin + decay tail. Confirmed the shared floor with the canonical.
+- [[2026-06-30-unknown-byte-corpus-sweep]] — flagged the correlation and ran the original encoding fit.
+- [[2026-07-22-first-moving-ride]] — corpus that (a) exercised D3 for the first time, confirming multi-byte structure, (b) refit the LSB against the corrected canonical, (c) promoted the finding to `confirmed`.
+- [`scripts/id12d_d4_characterise.py`](../../../scripts/id12d_d4_characterise.py) — original characterisation script (pre-2026-07-22).
+- [`scripts/first_moving_ride_d3d4_refit.py`](../../../scripts/first_moving_ride_d3d4_refit.py) — 2026-07-22 refit + D3 activation check.
 
 See also: [[signal-wheel-speed-front]] (canonical D0:D1 12-bit field), [[signal-wheel-speed-rear]] (rear D5:D6 + D2 coarse mirror), [[byte-encoding-12-in-16]], [[always-on-broadcast-ids]].

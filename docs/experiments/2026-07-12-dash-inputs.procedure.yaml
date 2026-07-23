@@ -1,0 +1,125 @@
+name: dash-inputs
+description: >
+  Phase A ROAD↔SUPERMOTO toggle, Phase B trip reset, Phase C dash button
+  short presses — bracketed clean windows, auto-marked at each phase
+  event. Key-on, engine-OFF for cleanest per-window bit diffs on the
+  slow-decay group. Throttle work + engine-on timeline live in
+  2026-07-12-neutral-rpm-sweep.
+experiment: 2026-07-12-dash-inputs
+
+# Timing convention: marks fire at STEP START — i.e. the moment the rider is
+# cued to begin the action (start of SET hold, MODE short-press). The bus
+# broadcast is keyed off the press edge, not the dash redraw, so this is the
+# right reference for analysis.
+#
+# Wifi-bridge is bike-powered (ADR 0018): the ESP is off until the key is on.
+# So the capture host connects to ws://<esp>/stream AFTER key-on, and this
+# procedure starts with the assumption that key is already ON. No pre-key-off
+# silence window this time — the first analysis window is the post-key-on
+# baseline below. See [[feedback-wifi-bridge-procedures-key-on-start]].
+#
+# Engine OFF throughout: the manual specifies "stationary" for the mode
+# toggle but not engine state. If Phase A's first SET-hold produces no dash
+# response, the ABS ECU likely requires engine-on — abort Phase A but keep
+# Phases B and C (both pure cluster-side). See the .md for the flip-back
+# recipe (add starter + idle-settled steps).
+#
+# Holds are generous (≥6 s settle between events, ≥5 s "get ready" before each
+# phase) so the rider can reposition between dash work without rushing. Settle
+# windows comfortably exceed the 100 ms cycle of the slowest IDs in the
+# slow-decay group.
+
+steps:
+  # ---------------------------------------------------------------- Setup
+  - prompt: "Key is already ON (wifi-bridge boots on ignition). Kill RUN, neutral, side stand down. Engine OFF throughout. Hands off the bike."
+    duration_secs: 30
+    mark: { key: mark, label: "post-key-on baseline (engine off)" }
+
+  # --------------------------------------------------- Phase A — mode toggle
+  - prompt: "PHASE A — ROAD↔SUPERMOTO. Use MODE short-presses to reach the ABS screen. Press SPACE on each MODE press. Take your time."
+    duration_secs: 30
+
+  - prompt: "Get into position — finger on SET, ready to hold."
+    duration_secs: 8
+
+  - repeat: 4
+    steps:
+      - prompt: "Hold SET 3–5 s — toggle mode. If dash shows no mode change on iter 1, ABORT Phase A (engine-on may be required) and skip to Phase B via next-phase."
+        duration_secs: 10
+        countdown_from: 3
+        mark: { key: mode, label: "mode toggle {iter} of {loop_count} (SET-hold start)" }
+      - prompt: "Settle — hands off, let the bus quiet down."
+        duration_secs: 8
+
+  # --------------------------------------------------- Phase B — trip reset
+  - prompt: "PHASE B — trip reset. Use MODE short-presses to reach Trip 1. SPACE on each press."
+    duration_secs: 30
+
+  - prompt: "Get into position — finger on SET, ready to hold."
+    duration_secs: 8
+
+  - prompt: "Hold SET 3 s — Trip 1 should jump to 0.0."
+    duration_secs: 10
+    countdown_from: 3
+    mark: { key: trip, label: "trip reset 1 (value-changing, SET-hold start)" }
+
+  - prompt: "Settle — hands off."
+    duration_secs: 8
+
+  - prompt: "Hold SET 3 s again — no-op reset (already 0.0)."
+    duration_secs: 10
+    countdown_from: 3
+    mark: { key: trip, label: "trip reset 2 (no-op, SET-hold start)" }
+
+  - prompt: "Settle — hands off."
+    duration_secs: 8
+
+  # --------------------------------------------- Phase C — dash short presses
+  - prompt: "PHASE C — dash button short presses. We are on Trip 1. SET will cycle Trip 1 sub-menus."
+    duration_secs: 8
+
+  - repeat: 4
+    steps:
+      - prompt: "SET short-press — Trip 1 sub-menu cycle."
+        duration_secs: 7
+        countdown_from: 3
+        mark: { key: mark, label: "SET short Trip1 sub {iter} of {loop_count}" }
+
+  - prompt: "MODE short-press — advance Trip 1 → Trip 2."
+    duration_secs: 7
+    countdown_from: 3
+    mark: { key: mark, label: "MODE short → Trip 2" }
+
+  - repeat: 4
+    steps:
+      - prompt: "SET short-press — Trip 2 sub-menu cycle."
+        duration_secs: 7
+        countdown_from: 3
+        mark: { key: mark, label: "SET short Trip2 sub {iter} of {loop_count}" }
+
+  - prompt: "MODE short-press — advance Trip 2 → ABS. (SET on ABS would re-toggle mode — DO NOT press SET here.)"
+    duration_secs: 7
+    countdown_from: 3
+    mark: { key: mark, label: "MODE short → ABS" }
+
+  - prompt: "MODE short-press — advance ABS → ODO."
+    duration_secs: 7
+    countdown_from: 3
+    mark: { key: mark, label: "MODE short → ODO" }
+
+  - repeat: 3
+    steps:
+      - prompt: "SET short-press — ODO sub-menu cycle."
+        duration_secs: 7
+        countdown_from: 3
+        mark: { key: mark, label: "SET short ODO sub {iter} of {loop_count}" }
+
+  - prompt: "Final 8 s hold on ODO — settle the cluster before shutdown."
+    duration_secs: 10
+
+  # ----------------------------------------------------------- Shutdown
+  - prompt: "Key OFF now. Hold 3 s of tail silence."
+    duration_secs: 6
+
+  - prompt: "Done. Press q to stop capture and fill in session.md."
+    duration_secs: null

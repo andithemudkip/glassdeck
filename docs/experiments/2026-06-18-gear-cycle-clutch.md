@@ -121,7 +121,7 @@ No new arbitration ID appeared during pumping — the same 11 always-on IDs were
 
 **Interpretation:** clutch lever state is not broadcast at the diagnostic-port stub when the bike is key-on, engine-off, in neutral. Most likely the ECU only publishes clutch state when the engine is running (starter-interlock / RPM-cut logic). Less likely but possible: it's on a separate bus not bridged to this stub, or it's hidden in D7 behind the checksum.
 
-The clutch question is deferred to the engine-on stationary experiment ([`2026-06-18-engine-on-stationary-inputs.md`](2026-06-18-engine-on-stationary-inputs.md)). Phase C of this experiment (second clutch baseline) is moot and should be skipped.
+The clutch question was later resolved engine-off in [`2026-06-23-shift-lever-vs-clutch.md`](2026-06-23-shift-lever-vs-clutch.md): the null here was a switch-threshold issue (shallow pumps below the lever sensor's activation point), and the clutch is broadcast at `129` D0 bit 3. See [[signal-clutch]]. Phase C of this experiment (second clutch baseline) is moot and should be skipped.
 
 This null result does not affect the gear hypothesis for Phase B — `129` D0 staying at `0x00` is consistent with the gear nibble encoding `N = 0` (we just need gear changes to test it). The cross-check "bit 3 = 1 when clutch in during gear shifts" in the original Phase B analysis plan is no longer expected to hit — adjust expectations accordingly.
 
@@ -145,8 +145,8 @@ Log: [`logs/2026-06-19-gear-cycle-clutch-B-gear-cycle/`](../../logs/2026-06-19-g
 
 ## Follow-ups
 
-- **Engine-on rerun for gears 2–6.** Bundle into [`2026-06-18-engine-on-stationary-inputs.md`](2026-06-18-engine-on-stationary-inputs.md) or a brief first-motion capture. With the engine running and the input shaft spinning, all gears should engage and the `0x2`–`0x6` mapping can be validated. Bonus: watch for any transient intermediate value (`0xF`?) during the shift itself.
-- **Re-test clutch with engine running** in [`2026-06-18-engine-on-stationary-inputs.md`](2026-06-18-engine-on-stationary-inputs.md). If still not visible engine-on, mark clutch as not-observable-at-this-connector and stop chasing it for the MVP.
+- **Gears 2–6.** Resolved engine-off by [`2026-06-23-paddock-stand-gear-spin.md`](2026-06-23-paddock-stand-gear-spin.md) — spinning the rear wheel by hand walked the dogs in for every gear; `0x2`–`0x6` mapping validated. See [[signal-gear-position]] (`confirmed`).
+- **Clutch with engine running.** Superseded — clutch was found engine-off at `129` D0 bit 3 in [`2026-06-23-shift-lever-vs-clutch.md`](2026-06-23-shift-lever-vs-clutch.md); Phase A's null result here was a switch-threshold issue (shallow pumps below the lever sensor's activation point), not clutch-not-on-bus. See [[signal-clutch]] (`confirmed`).
 - Phase C (second clutch baseline) is skipped — moot given Phase A's null result.
 - **What drives `540` D3 hi nibble?** Idle-baseline cardinality of 4, but static in Phase B. Mode toggle + warm-up are the prime candidates.
 - Open a small experiment on `541` D6: capture two long key-on-engine-off sessions (one immediately after a cold start, one after warm-soak) and see whether D6 tracks time-since-key-on linearly or saturates with temperature.
