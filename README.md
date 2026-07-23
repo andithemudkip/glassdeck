@@ -2,31 +2,32 @@
 
 I'm building an open-source dashboard for my 2020 Husqvarna Svartpilen 401. It's a KTM 390 platform bike, so most of this should transfer to the Duke 390, RC 390, Vitpilen 401, and the 250 variants.
 
-Right now it's not a dashboard yet. It's a pile of CAN captures and a slowly growing map of what the OEM broadcasts on the diagnostic bus. That map is the first useful output for anyone else on one of these bikes, dashboard or not.
+Right now it's not a dashboard yet. It's a pile of CAN captures and a slowly growing map of what the OEM broadcasts on the diagnostic bus. 
 
 **Status:** Phase 1, capture and decode. See [`docs/status.md`](docs/status.md) for what I'm actually working on this week.
 
 ## Why bother
 
-The stock dash is fine but the small stuff adds up. One combined blinker icon instead of separate left/right. No phone connection. Menus that need three button presses to check trip B. Membrane buttons that feel mushy from factory.
+The stock dash is fine but the small stuff adds up. One combined blinker icon instead of separate left/right. No phone connection. Menus that need three button presses to check trip B. Membrane buttons that feel mushy from factory, which you also can't use unless you're at a full stop because they're mounted on the dashboard itself (smart) (not).
 
-There are closed replacement dashes out there. None of them publish the CAN definitions they figured out, which means every person who wants to build something on this platform has to redo the reverse-engineering from scratch. That's the actual motivation. Even if I never finish the dashboard, having a public signal map for the 390 platform is worth doing.
-
-Full brief and phase plan: [`docs/research.md`](docs/research.md).
+There are closed replacement dashes out there. None of them publish the CAN definitions they figured out, which means every person who wants to build something on this platform has to redo the reverse-engineering from scratch. That's the actual motivation. Even if I never finish the dashboard, having a public signal map for the 390 platform seemed worth doing.
 
 ## What's decoded
 
-The bike puts out 11 arbitration IDs, 8 bytes each, at 500 kbps on the diagnostic port. 88 payload bytes total. So far, across 18 sessions and about 800k frames:
+The bike puts out 11 arbitration IDs, 8 bytes each, at 500 kbps on the diagnostic port. 88 payload bytes total. So far, across 15 sessions and about 1.2M frames:
 
 | | bytes | % |
 |---|---:|---:|
-| Decoded (primary signal) | 23 | 26% |
+| Decoded (primary signal, fully or partially) | 28 | 32% |
 | D7 structural hash (6-cycle XOR ⊕ 5-bit GF(2) of D0..D6) | 9 | 10% |
-| Always zero everywhere | 3 | 3% |
-| Redundant mirror of a decoded signal | 2 | 2% |
-| Still unknown | 51 | 58% |
+| Always zero everywhere | 44 | 50% |
+| Static non-zero constant | 4 | 5% |
+| Redundant mirror of a decoded signal | 3 | 3% |
+| Undecoded | 0 | 0% |
 
-Confirmed signals: RPM, throttle, gear, clutch, front and rear wheel speed, coolant temp, side stand, kill switch (three redundant copies), and some engine on/off counters.
+Confirmed signals: RPM, throttle, gear, clutch, front and rear wheel speed, coolant temp, side stand, kill switch (three redundant copies), engine torque, and engine on/off counters. Provisional: ABS lamp (with a mirror on `12E`), quickshifter cut/blip, shift-failed, fuel-injection setpoint, and a coarse rear-speed band.
+
+Zero undecoded bytes remain, but that's not the same as "fully mapped". Unknown structure still lives inside partially-decoded bytes (bits within an `S◐` cell) and behind the 44 always-zero bytes, some of which could carry latent signals under rider inputs we haven't exercised yet.
 
 Signals that aren't there: fuel level and battery voltage don't appear on the passive broadcasts. The OEM dash reads the fuel sender directly through its own ADC, and probably the battery too. So any replacement dash needs those wires tapped separately. There's a finding on that: [`docs/findings/hardware/fuel-level-sender.md`](docs/findings/hardware/fuel-level-sender.md).
 
@@ -45,16 +46,16 @@ Wiring, pinout, BOM: [`docs/hardware/`](docs/hardware/).
 
 ## Firmware
 
-Two subprojects, both listen-only, both share code out of `firmware/lib/`:
+Two subprojects (so far), both share code out of `firmware/lib/`:
 
-- [`firmware/can-logger/`](firmware/can-logger/) is the desk-tethered logger. SLCAN over USB. This is what produced every capture in `logs/`.
+- [`firmware/can-logger/`](firmware/can-logger/) is the desk-tethered logger. SLCAN over USB. This is what produced every capture in `logs/` up until [`logs/2026-07-22-first-moving-ride`](logs/2026-07-22-first-moving-ride/).
 - [`firmware/wifi-bridge/`](firmware/wifi-bridge/) is the untethered version I ride with. WiFi soft-AP, SLCAN over WebSocket, a browser live view at `http://192.168.4.1/`, and OTA reflash via `POST /ota`.
 
 ESP-IDF via PlatformIO. Build/flash notes in [`firmware/README.md`](firmware/README.md).
 
 ## Scripts
 
-Python stuff in [`scripts/`](scripts/). The three that get most use:
+Python stuff in [`scripts/`](scripts/). The three that got most use, at least in the beginning:
 
 - `scripts/capture.py` reads SLCAN from the logger (USB or WebSocket), writes a labelled directory under `logs/`, and can drive a rider through a scripted procedure step by step.
 - `scripts/inventory_ids.py` gives per-ID frame counts, periods, active bytes. First thing I run on any new capture.
@@ -129,13 +130,13 @@ firmware/                ESP32 subprojects (can-logger, wifi-bridge)
 
 ## Caveats
 
-Any of this could be wrong. Findings marked `provisional` haven't been replicated across bikes or sessions. It is not a dashboard yet, and 58% of the payload bytes are still question marks. If you have another 390-platform bike and want to help, another capture on the same experiments is more useful than almost anything else right now.
+Any of this could be wrong. Findings marked `provisional` haven't been replicated across bikes or sessions. It is not a dashboard yet, and plenty of structure inside partially-decoded and always-zero bytes is still unaccounted for. If you have another 390-platform bike and want to help, another capture on the same experiments is more useful than almost anything else right now.
 
 ## AI in the loop
 
-I use Claude Code a lot on this. It writes a big chunk of the Python, drafts firmware, and I bounce analysis off it. [`CLAUDE.md`](CLAUDE.md) is the brief I hand it if you're curious how that goes.
+I use Claude Code a lot on this. It writes a big chunk of the Python, drafts firmware, and I bounce analysis off it. Check out [`CLAUDE.md`](CLAUDE.md) for the setup I use.
 
-The bike side stays with me: riding, wiring, running captures, and deciding when a hypothesis is solid enough to become a finding. That's less a rule than the natural split, since it can't sit on the seat and I can't hand-correlate 800k frames.
+The bike side is fully done by me: planning, riding, wiring, running captures, and deciding when a hypothesis is solid enough to become a finding. 
 
 One thing worth mentioning: LLMs are pretty good at producing decodes that sound right and aren't. A byte that's actually a hash gets confidently named as a counter, that sort of thing. The "no finding without an experiment" rule is partly there to catch that. Everything in `docs/findings/` links back to the raw log behind it, so you can go check.
 
