@@ -12,7 +12,7 @@ Nothing — pick from Next actions.
 
 - **Firmware.** `can-logger` v1 shipped, listen-only @ 500 kbps. `wifi-bridge` M1–M6 + M7a shipped + on-bike-validated by [[2026-07-22-first-moving-ride]]; RX pinned to core 1 for WiFi-coexistence, see [[wifi-vs-can-core-partitioning]]. Shared `firmware/lib/{twai,slcan,status_led}/` used by both targets. Iteration: OTA reflash via `POST /ota`; live capture via `websocat -n ws://192.168.4.1/stream | scripts/capture.py --stdin`.
 - **Capture tooling.** `scripts/capture.py` end-to-end; `scripts/inventory_ids.py` derives per-ID counts/periods. Operator's guide at [`docs/guides/capturing.md`](guides/capturing.md).
-- **Decoding coverage.** Post-2026-07-22: 28 / 88 payload bytes carry a primary signal (was 22 pre-ride), 44 always-zero (was 3), 4 static non-zero, 9 D7 hash, 3 dup mirrors, **0 undecoded** (was 51). See [`docs/signals/coverage.md`](signals/coverage.md). Unknown structure now lives inside `S◐` cells and behind untested inputs on the always-zero cells — no more black-box bytes.
+- **Decoding coverage.** Post-2026-07-22: 26 / 88 payload bytes carry a primary signal (was 22 pre-ride), 44 always-zero (was 3), 4 static non-zero, 9 D7 hash, 5 dup mirrors, **0 undecoded** (was 51). See [`docs/signals/coverage.md`](signals/coverage.md). Unknown structure now lives inside `S◐` cells and behind untested inputs on the always-zero cells — no more black-box bytes.
 - **Load-axis interpretation open.** `540 D1` and `121 A/B` both respond to real load; whether they're MAP-like, torque-like, or fuel-injection-quantity-derived needs a controlled load capture (paired same-RPM/same-throttle in different gears, or coast-down runs).
 
 ## Next actions

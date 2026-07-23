@@ -31,15 +31,15 @@ Index of decoded signals and per-ID payload coverage on the 2020 Husqvarna Svart
 | abs_lamp (mirror) | `12E` | D6 bits 4, 5 (each LOW=lit) | provisional | [signal-abs-lamp](../findings/can/signal-abs-lamp.md) |
 | shift_cut_active | `121` | D6 bit 0 (ECU ignition cut for any shift; QS-vs-clutched ambiguous) | provisional | [signal-quickshifter](../findings/can/signal-quickshifter.md) |
 | shift_blip_active | `121` | D6 bit 1 (down-shift auto-blip) | provisional | [signal-quickshifter](../findings/can/signal-quickshifter.md) |
+| engine_torque | `121` | D0:D1 signed int16 BE (~0.25 N·m/LSB provisional) | confirmed | [signal-engine-torque](../findings/can/signal-engine-torque.md) |
+| engine_torque (redundant mirror) | `121` | D2:D3 signed int16 BE — mirrors D0:D1 within ~1 LSB | confirmed | [signal-engine-torque](../findings/can/signal-engine-torque.md) |
 
 ### Decoded but unattributed (encoding known, physical quantity not)
 
 | Slot | ID | Location | Status | Finding |
 |---|---|---|---|---|
-| engine_torque | `121` | D0:D1 signed int16 BE (~0.25 N·m/LSB provisional) | confirmed | [signal-engine-torque](../findings/can/signal-engine-torque.md) |
-| engine_torque (redundant) | `121` | D2:D3 signed int16 BE — mirrors D0:D1 within ~1 LSB | confirmed | [signal-engine-torque](../findings/can/signal-engine-torque.md) |
 | front-wheel-speed mirror | `12D` | D3:D4 BE u16, 3/64 km/h LSB | encoding confirmed on D4 (D3 unexercised < 12.7 km/h) | [byte-12d-d3-d4-front-mirror](../findings/can/byte-12d-d3-d4-front-mirror.md) |
-| engine-state bits (5×) | `121`, `540` | `121` D1.5, D1.7, D5.3; `540` D2.6, D3.4 | flips engine-on / engine-off, attribution open | [engine-state-bits-decay-shape](../findings/can/engine-state-bits-decay-shape.md) |
+| engine-state bits (3×) | `121`, `540` | `121` D5.3; `540` D2.6, D3.4 | flips engine-on / engine-off, attribution open | [engine-state-bits-decay-shape](../findings/can/engine-state-bits-decay-shape.md) |
 | D7 checksum | 9 IDs | D7 | confirmed: 6-cycle XOR ⊕ 5-bit GF(2) hash of D0..D6 | [byte-d7-cycle-hash](../findings/can/byte-d7-cycle-hash.md) |
 
 ## Per-ID byte coverage
@@ -58,7 +58,7 @@ Cell legend:
 | ID    | period | D0 | D1 | D2 | D3 | D4 | D5 | D6 | D7 |
 |-------|-------:|----|----|----|----|----|----|----|----|
 | `120` |  20 ms | S rpm hi | S rpm lo | S throttle | 0 | 0 | 0 | 0 | h |
-| `121` |  20 ms | S intA hi | S◐ intA lo + es b5,b7 | S intB hi | S intB lo | ? static (0x04) | S◐ kill-dup b2 + es b3 | S◐ shift-cut b0 + shift-blip b1 | h |
+| `121` |  20 ms | S torque hi | S torque lo | dup torque hi (D0:D1 mirror) | dup torque lo (D0:D1 mirror) | ? static (0x04) | S◐ kill-dup b2 + es b3 | S◐ shift-cut b0 + shift-blip b1 | h |
 | `129` |  20 ms | S◐ gear b7:4, clutch b3, shift-failed b1 (b0,b2 = 0) | 0 | 0 | ? static (0x01) | 0 | 0 | 0 | h |
 | `12A` |  50 ms | S◐ abs-lamp b4 | S◐ abs-lamp b0 + d1-b2 (semantics open) | 0 | 0 | 0 | S◐ abs-lamp b3 | 0 | h |
 | `12D` |  10 ms | S frontWS hi | S◐ frontWS hi-nib + rear-speed band lo-nib (b0-3) | dup coarse rear-speed mirror, 1/10 km/h | dup frontWS-mirror hi (u16 BE at ~0.0577 km/h) | dup frontWS-mirror lo | S rearWS hi | S rearWS lo | h |
@@ -77,11 +77,11 @@ After the 2026-06-30 corpus sweep:
 
 | Category | Bytes | %  |
 |---|---:|---:|
-| Carries a primary signal (S or S◐) | 28 | 32 % |
+| Carries a primary signal (S or S◐) | 26 | 30 % |
 | Structural D7 hash (h)             |  9 | 10 % |
 | Always-zero across 15 sessions (0) | 44 | 50 % |
 | Static non-zero constant           |  4 |  5 % |
-| Redundant mirror of decoded signal (dup) | 3 | 3 % |
+| Redundant mirror of decoded signal (dup) | 5 | 6 % |
 | Undecoded (?)                      |  0 |  0 % |
 
 Whole-ID status:
@@ -96,5 +96,3 @@ Bit-counting the unknowns is misleading — a single undecoded byte could carry 
 - **Zero undecoded bytes remain — a first.** Down from 51 pre-2026-07-22. Uncharted structure now lives entirely inside the `S◐` cells (bits within partially-decoded bytes) and the 44 always-zero bytes (which could carry latent signals under untested inputs). No new arbitration ID will arrive: 800 679 + 386 271 frames across 15 sessions span every condition exercised and surface zero IDs outside the documented 11.
 - **No UDS / diagnostic side-channel.** Signals that only respond to UDS request (likely candidates: fuel level, odometer, fault codes — see [fuel-consumption-absent-from-broadcasts](../findings/can/fuel-consumption-absent-from-broadcasts.md), [battery-voltage-absent-from-always-on-broadcasts](../findings/can/battery-voltage-absent-from-always-on-broadcasts.md)) won't surface in passive captures regardless of how many bytes we work through.
 - **Always-zero is not the same as empty.** [byte-encoding-12-in-16](../findings/can/byte-encoding-12-in-16.md) shows a low nibble that read clean-zero engine-off and carried a real signal engine-on. A `0` cell becomes a `?` the first time an untested input flips it.
-
-Priority heuristic for the next probe: pick an undecoded byte on a fast-period ID (10 / 20 ms suggests the byte is meant for fast-changing state) and pair it with a rider input not yet exercised — ABS event, indicator stalk, mode button, brake pressure, ambient-temp swing. `450` payload moving for the first time would also unlock a whole ID at once.

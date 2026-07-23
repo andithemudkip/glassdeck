@@ -108,4 +108,6 @@ At warm idle: torque wobbles around 0 with σ ~0.5-1.0 LSB (< 0.25 N·m of noise
 
 Originally logged as `byte-121-twin-int16` (a byte-level encoding finding — the semantic was open). The 2026-07-22 moving corpus surfaced the sign-flip and rolling-load response; the shift-cut test in the same corpus provided direct causal evidence; the physics-based LSB check on 2026-07-23 pinned the magnitude to a physically consistent range. Renamed to `signal-engine-torque` on 2026-07-23 and promoted to confirmed. The redundant `D2:D3` channel is retained under the same finding — same quantity, redundant broadcast.
 
+As part of the promotion, `121` D1 bits 5 and 7 — previously listed in [[engine-state-bits-decay-shape]] as candidate engine-state flags on the strength of cross-session dominant-value differences — were reinterpreted as LSBs of the signed torque low byte and removed from that finding. The engine-off bias (D0:D1 ≈ +170) vs idle (~0) fully accounts for the observed bit differences without an independent state flag.
+
 See also: [[signal-quickshifter]] (the ignition cut event this signal uses as its own causal test), [[fuel-consumption-derivation-from-torque]] (the primary fuel model this signal drives), [[signal-fuel-injection-setpoint]] (the parallel fuel-adjacent scalar on `540 D1`), [[signal-rpm]], [[signal-throttle-position]], [[byte-d7-cycle-hash]].
