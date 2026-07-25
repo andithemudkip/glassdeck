@@ -31,6 +31,8 @@ Index of decoded signals and per-ID payload coverage on the 2020 Husqvarna Svart
 | abs_lamp | `12A` | D0 b4, D1 b0, D5 b3 (each HIGH=lit) | provisional | [signal-abs-lamp](../findings/can/signal-abs-lamp.md) |
 | 12A_d1_b2 (semantics open) | `12A` | D1 bit 2 | provisional | [signal-12a-d1-bit2](../findings/can/signal-12a-d1-bit2.md) |
 | abs_lamp (mirror) | `12E` | D6 bits 4, 5 (each LOW=lit) | provisional | [signal-abs-lamp](../findings/can/signal-abs-lamp.md) |
+| ride_mode | `12A` | D2 bit 1 bool (0=ROAD, 1=SUPERMOTO; semantic = rear-ABS-enable) | confirmed | [signal-ride-mode](../findings/can/signal-ride-mode.md) |
+| ride_mode (mirror) | `450` | D4 bit 7 bool (same polarity, transitions 20-300 ms behind) | confirmed | [signal-ride-mode](../findings/can/signal-ride-mode.md) |
 | shift_cut_active | `121` | D6 bit 0 (ECU ignition cut for any shift; QS-vs-clutched ambiguous) | provisional | [signal-quickshifter](../findings/can/signal-quickshifter.md) |
 | shift_blip_active | `121` | D6 bit 1 (down-shift auto-blip) | provisional | [signal-quickshifter](../findings/can/signal-quickshifter.md) |
 | engine_torque | `121` | D0:D1 signed int16 BE (~0.25 N·m/LSB provisional) | confirmed | [signal-engine-torque](../findings/can/signal-engine-torque.md) |
@@ -61,10 +63,10 @@ Cell legend:
 | `120` |  20 ms | S rpm hi | S rpm lo | S throttle | 0 | 0 | 0 | 0 | h |
 | `121` |  20 ms | S torque hi | S torque lo | dup torque hi (D0:D1 mirror) | dup torque lo (D0:D1 mirror) | ? static (0x04) | S◐ kill-dup b2 + es b3 | S◐ shift-cut b0 + shift-blip b1 | h |
 | `129` |  20 ms | S◐ gear b7:4, clutch b3, shift-failed b1 (b0,b2 = 0) | 0 | 0 | ? static (0x01) | 0 | 0 | 0 | h |
-| `12A` |  50 ms | S◐ abs-lamp b4 | S◐ abs-lamp b0 + d1-b2 (semantics open) | 0 | 0 | 0 | S◐ abs-lamp b3 | 0 | h |
+| `12A` |  50 ms | S◐ abs-lamp b4 | S◐ abs-lamp b0 + d1-b2 (semantics open) | S◐ ride-mode b1 | 0 | 0 | S◐ abs-lamp b3 | 0 | h |
 | `12D` |  10 ms | S frontWS hi | S◐ frontWS hi-nib + rear-speed band lo-nib (b0-3) | dup coarse rear-speed mirror, 1/10 km/h | dup frontWS-mirror hi (u16 BE at ~0.0577 km/h) | dup frontWS-mirror lo | S rearWS hi | S rearWS lo | h |
 | `12E` |  20 ms | 0 | 0 | 0 | 0 | 0 | 0 | S◐ abs-lamp mirror b4, b5 | h |
-| `450` |  50 ms | 0 | 0 | 0 | 0 | 0 | 0 | ? static (0x28 constant) | 0 |
+| `450` |  50 ms | 0 | 0 | 0 | 0 | S◐ ride-mode-mirror b7 | 0 | ? static (0x28 constant) | 0 |
 | `540` | 100 ms | 0 | S fuel-sp | S◐ es b6 | S◐ side-stand b0 + es b4 (b5–7 = 0) | 0 | S coolant hi | S coolant lo | 0 |
 | `541` |  20 ms | 0 | 0 | S◐ kill-switch b4 | S◐ time-bin 0/1/2 | S engine-on counter (full uint8 mod-256) | 0 | S engine-off counter | h |
 | `5A0` | 100 ms | 0 | 0 | 0 | 0 | ? static (0x04 latched at engine-start) | 0 | 0 | h |
@@ -89,8 +91,8 @@ After the 2026-06-30 corpus sweep:
 
 Whole-ID status:
 
-- **No ID left with zero attributed bytes.** `12A` and `12E` now carry ABS-lamp bits per [[signal-abs-lamp]] (2026-07-22). `5A0` has D4 latched at 0x04, all other bytes now confirmed always-zero across the 15-session corpus — no primary signal, but structure is characterised.
-- **`450` payload static-frozen at fixed values** (D0-D5 = 0x00, D6 = 0x28, D7 = 0). Never moved across any captured condition including the full 2026-07-22 real-riding corpus. Some rider input we haven't exercised must move it (or it's UDS-only).
+- **No ID left with zero attributed bytes.** `12A` and `12E` carry ABS-lamp bits per [[signal-abs-lamp]] (2026-07-22); `12A` also carries ride-mode per [[signal-ride-mode]] (2026-07-24). `5A0` has D4 latched at 0x04, all other bytes now confirmed always-zero across the 15-session corpus — no primary signal, but structure is characterised.
+- **`450` was static-frozen until the mode toggle broke it.** Pre-2026-07-24 corpus (15 sessions, all in ROAD) never saw D0-D5 or D7 move; D6 latched at 0x28. The 2026-07-24 mode-toggle session flipped D4 bit 7 as the ride-mode mirror — so D4 no longer static. D0-D3, D5, D7 remain zero and D6 still `0x28`; another rider input may yet exercise them (or it's UDS-only).
 
 ## How to read "what's missing"
 

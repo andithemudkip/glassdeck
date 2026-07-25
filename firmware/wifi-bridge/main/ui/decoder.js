@@ -8,7 +8,7 @@
   // Any signal in the codegen output that isn't listed here appears after.
   const DISPLAY_ORDER = [
     "rpm", "gear_position", "wheel_speed_rear", "wheel_speed_front",
-    "throttle_position", "engine_torque", "coolant_temp", "fuel_injection_setpoint",
+    "throttle_position", "engine_torque", "coolant_temp", "ride_mode", "fuel_injection_setpoint",
     "kill_switch", "side_stand", "abs_lamp",
     "clutch", "shift_cut_active", "shift_blip_active", "shift_failed",
     "engine_on_counter", "engine_off_counter",
@@ -16,6 +16,7 @@
   const LABEL = {
     rpm: "RPM",
     gear_position: "GEAR",
+    ride_mode: "MODE",
     wheel_speed_rear: "SPEED",
     wheel_speed_front: "WHEEL F",
     throttle_position: "THROTTLE",
@@ -701,6 +702,7 @@
     gear_position: "hero",
     throttle_position: "second",
     coolant_temp: "second",
+    ride_mode: "second",
   };
   const $modeBtn = document.getElementById("modeBtn");
 

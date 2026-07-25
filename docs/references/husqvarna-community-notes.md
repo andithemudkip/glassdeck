@@ -94,3 +94,52 @@ What this changes for us:
 - **Risk model shifts** from "this may be unsolvable without OEM cooperation" to "this is hard but proven solvable; budget the time for the discovery phase rather than design around the limitation."
 - **Method we likely need.** Since they did it but the broadcast traffic was insufficient, the most likely answer is one of: (a) the dash sends a frame *at the right moment in the boot sequence* that they originally missed because their capture started too late, (b) a UDS / ISO-TP request-response handshake that only shows up if you look for paired request+response IDs, or (c) traffic on a non-CAN bus (K-Line / LIN) that they instrumented separately. Our capture rig should be designed to not rule any of these out.
 - **What it does *not* give us.** No technical details — the solution is being kept private. We get encouragement, not shortcuts.
+
+---
+
+## ABS / TC disable: ECU wants 5s of sustained signal; custom dash fakes the hold
+
+- **Source:** <https://www.reddit.com/r/Husqvarna/> — comment by u/dominicht on "[Update 10] Custom Dashboard Project", reply to u/These-Economics-384
+- **Date seen:** 2026-07-24 (comment marked "3 mo. ago", so written ~2026-04)
+
+Verbatim:
+
+> The ABS and TC can be disabled with this dashboard too, but it needs to wait 5 seconds as well. It's a simple toggle press you don't need to hold. The 5sec is what the ECU expects to turn these off.
+>
+> Currently, you'd need to disable again at every ignition, but I'll see if there's a way it could be done automatically in a secure and smooth way. I'm not sure turning on the ignition and having to wait 2x5 seconds with a loading animation is the best user experience
+
+### Claims worth treating as hypotheses
+
+1. **The ECU expects 5 seconds of sustained signal to disable ABS or TC.** On the OEM bike the rider provides that by holding the mode button; on the custom dash the rider short-presses and the dash itself sustains the signal for 5s (the "loading animation" the author references is that dwell playing out). This reading matches OEM UX — the stock 401 dash requires a press-and-hold, so the ECU-side requirement is almost certainly unchanged and the custom dash is abstracting the hold.
+   - Less-likely alternative: the frame is a single discrete command and the 5s is a post-command ECU timer that the OEM dash coincidentally masks behind the hold. Possible but weaker prior given how the stock dash behaves.
+2. **Each system has its own 5s dwell** (hence "2x5 seconds" if disabling both) — ABS and TC are separately gated, not a single combined command.
+3. **Disable does not persist across ignition cycles** — the ECU re-enables both on every key-on, so whatever the dash sends must be re-issued each time.
+4. **Author suggests auto-re-disable on key-on is achievable** ("if there's a way it could be done automatically in a secure and smooth way"), implying no cryptographic / rolling-code gate — the barrier is UX, not authentication.
+
+### Why this matters for us
+
+Directly relevant to `docs/research.md` open question **#2 — "Does the ECU expect messages from the dashboard?"**: yes, at least for rider-initiated mode changes like ABS/TC disable. Adds a second confirmed dash→ECU exchange beyond the boot self-test.
+
+Also constrains a future TX ADR: if we ever transmit an ABS/TC disable, we likely need to *sustain* the disable frame(s) for the full 5s window rather than fire-and-forget. Verify frame period and total dwell against the OEM dash before authorizing any TX.
+
+### What this does *not* tell us
+
+- The CAN ID(s) or byte layout of whatever the dash sends.
+- Whether the sustained signal is a repeating frame at some period or a single frame with a "button held" bit set for the duration.
+- Whether ABS-off and TC-off are separate messages or a shared "rider mode" message with bits per system.
+- What happens if the disable is sent before the boot self-test completes.
+
+### Verification plan when we get there
+
+Capture OEM dash traffic across a key-on → hold-mode-button-to-disable-ABS (or TC) sequence. Look for a frame or bit that stays asserted from press-start until the ECU acknowledges (dash lamp changes). Diff against a baseline where the rider doesn't touch the mode button. Repeat with ignition cycled to confirm the re-enable behavior. Cross-reference any candidate IDs against blalor's KTM 690 decoder and our own findings index.
+
+### 2026-07-24 update — partially verified against our 401
+
+Ran the capture. Findings in [[signal-ride-mode]]. Reconciliation vs the claims above:
+
+1. **"Sustained signal" claim — partially reinterpreted.** On our 401, no *separate* "button held" bit fires during the 3 s SET-hold. The "sustained signal" the ECU wants is the *state bit itself persisting at its new value*: cluster (or ABS ECU) publishes `12A` D2 b1 / `450` D4 b7 at 50 ms period, and once the new value has been on the bus long enough (~3 s on the 401, matching the manual's 3–5 s), the ABS ECU commits. The commenter's "5 s dwell" likely refers to the same mechanism on their bike, just with a longer gate.
+2. **"Each system has its own dwell" — untested here.** We only exercised ABS mode. TC on the 401 would need its own capture.
+3. **"Does not persist across ignition cycles" — untested here.** Would fall out of a key-cycle capture with the bike left in SUPERMOTO before key-off.
+4. **"No cryptographic gate" — supported by our data.** The two mirror bits are plain state broadcasts, no rolling counter or checksum-of-checksum protecting them. A replacement dash spoofing `450` D4 b7 = 1 for ≥ 3 s ought to work — pending the TX-probe experiment (deferred, needs an ADR).
+
+The **CAN ID / byte layout** question the original plan couldn't answer is now answered: `12A` D2 b1 primary, `450` D4 b7 mirror. Direction between them (which module is the command publisher and which is the confirming mirror) is still open — see [[signal-ride-mode]] Open.

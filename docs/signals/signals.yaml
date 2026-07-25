@@ -295,6 +295,19 @@
     1: LIT
   notes: "ABS warning lamp. HIGH = lit (key-on default), LOW = extinguished (self-test complete). Extinguishes at first front-wheel > 6 km/h crossing with engine running, on each fresh key-on cycle. Redundantly broadcast at 12A D1 bit 0, 12A D5 bit 3 (all same polarity), and inverted at 12E D6 bits 4 and 5 (LOW = lit). All 5 agree; use any one as source of truth. NOTE: 12A D1 bit 2 was included in an earlier draft but demoted after historical cross-check — see signal-12a-d1-bit2. From 2026-07-22-first-moving-ride."
 
+- name: ride_mode
+  status: confirmed
+  finding: signal-ride-mode
+  arbitration_id: 0x12A
+  byte: 2
+  bit_offset: 1
+  bit_length: 1
+  encoding: bool
+  values:
+    0: ROAD
+    1: SUPERMOTO
+  notes: "ROAD/SUPERMOTO toggle, semantic = rear-ABS-enable (SUPERMOTO disables rear ABS). Primary at 12A D2 bit 1 (ABS-family ID); mirror at 450 D4 bit 7 with same polarity, transitions within 20-300 ms. Command direction between the two publishers not proven from listen-only data — see signal-ride-mode Open. Bit flips ~3 s after SET-hold-start (cluster-side hold detection); state persists until next toggle. KTM decoder's 12A D1 bit 6 hint does NOT apply to the 401 (flat 0). From 2026-07-24-abs-mode-toggle."
+
 - name: engine_off_counter
   status: confirmed
   finding: signal-engine-off-counter

@@ -143,19 +143,36 @@ Applied to `540` and `450` (see `scripts/d7_540_450_check.py`):
 | `540` | 13,455 |             1,027 | `{0x00}` (100%) | 0 / 1,027 pairs |
 | `450` | 27,518 |                 1 | `{0x00}` (100%) | 0 / 1 pairs |
 
-`540`'s 1,027 distinct payloads varying D0..D6 with D7 frozen at `0x00` rules out the cycle scheme decisively — there's plenty of payload movement, and the predicted `f(payload)` lands at non-cycle values (e.g. `0x16`, `0x19`, `0x0F`, `0x07`, `0x08` for the first few payloads tried). `450` doesn't vary its payload in the corpus, but its D7 is also flat zero across 27k frames.
+`540`'s 1,027 distinct payloads varying D0..D6 with D7 frozen at `0x00` rules out the cycle scheme decisively — there's plenty of payload movement, and the predicted `f(payload)` lands at non-cycle values (e.g. `0x16`, `0x19`, `0x0F`, `0x07`, `0x08` for the first few payloads tried). `450` originally didn't vary its payload in the corpus, so the "outside the cycle family" call rested on `540`; that gap closed on 2026-07-24 — see next paragraph.
 
-**Reconfirmed across the larger 14-session corpus** by [[2026-06-30-unknown-byte-corpus-sweep]]: `540` D7 = 18,809 frames / 0 non-zero; `450` D7 = 38,507 frames / 0 non-zero. The "always-zero" claim holds across every condition exercised so far — cold boot, idle (cold/warm/hot), full RPM sweep, post-kill decay, gear cycling, clutch toggling, kill toggling, side-stand toggling, throttle sweep engine-off, wheel-spin engine-off, wheel-spin engine-on, shift-lever-vs-clutch, front-wheel hand-spin, front-wheel decay + high-beam toggle.
+**Reconfirmed across the larger 14-session corpus** by [[2026-06-30-unknown-byte-corpus-sweep]]: `540` D7 = 18,809 frames / 0 non-zero; `450` D7 = 38,507 frames / 0 non-zero.
+
+**`450` payload now known to vary — D7 still flat zero.** [[2026-07-24-abs-mode-toggle]] surfaced `450` D4 bit 7 as the [[signal-ride-mode]] mirror (0=ROAD, 1=SUPERMOTO); the payload takes two distinct values in that capture (`00 00 00 00 00 00 28 00` and `00 00 00 00 80 00 28 00`) and D7 = `0x00` across all 1656 frames. Same "outside the cycle family" conclusion, now with two payloads instead of one — closes the previous "we can't rule anything out on 450 because it never moves" caveat.
+
+The "always-zero D7" claim now holds across every condition exercised — cold boot, idle (cold/warm/hot), full RPM sweep, post-kill decay, gear cycling, clutch toggling, kill toggling, side-stand toggling, throttle sweep engine-off, wheel-spin engine-off, wheel-spin engine-on, shift-lever-vs-clutch, front-wheel hand-spin, front-wheel decay + high-beam toggle, **and now ride-mode toggle with `450` payload varying**.
 
 **Practical implication:** D7 on `540` and `450` is unprotected — either reserved (always-zero placeholder) or a different scheme that is currently inactive. For replay or novel TX on these IDs, the dashboard simply emits `D7 = 0x00`. No phase-lock, no `f` computation required.
 
 The "cycle family" is therefore the 9 catalog IDs (`120`, `121`, `129`, `12A`, `12D`, `12E`, `541`, `5A0`, `5B0`); `540` and `450` are outside the family.
 
+## Family split as a publisher-identity hint
+
+The two D7 conventions plausibly correspond to **different broadcasting modules**. Different modules would ordinarily use different firmware, and firmware tends to use one D7 convention across all messages it emits — the split we observe (9 IDs cycle+hash, 2 IDs flat-zero) is the shape you'd expect from two modules with different D7 policies rather than one module implementing two schemes.
+
+Which module maps to which family is not proven. `540` sits confidently in the "ECU-family" bucket (coolant temp, fuel-injection setpoint, side-stand — all engine-domain signals), so "D7=0 = ECU firmware convention" is a plausible initial reading. `450` shares the D7=0 convention which by itself would extend the same reading to it.
+
+**But there's a tension** with a separate piece of publisher-identity evidence documented in [[signal-ride-mode]]: `450` consistently emerges 46–223 ms *after* the ECU family at key-on across 4 cold-boot sessions, which is closer to the timing you'd expect from a *different* module (e.g. cluster) than from the ECU itself. Two readings survive:
+
+- **`450` is ECU-published** (per D7 family), but on a slower boot-time task than the primary ECU broadcasts — perhaps a task that waits for cluster state via a private bus before publishing.
+- **`450` is cluster- or ABS-published** and happens to use the D7=0 convention because a shared firmware library between vendors carried it over, not because the module is ECU.
+
+Both are consistent with the data. The D7 evidence and emergence evidence don't converge. Load-bearing for [[signal-ride-mode]]'s command-direction question — see that finding's Open section.
+
 ## Open
 
 - **Identify the underlying CRC-8 / LFSR polynomial.** The 5-bit linear map is fixed; reconstructing the underlying 8-bit CRC poly (if any) is a small additional puzzle that would give the additional 3 high bits "for free" and possibly identify a standard variant for documentation. Nice-to-have, not needed for TX.
 - **Counter-phase alignment across IDs.** Now decoupled from the `f` puzzle. Useful for minimizing the listen-before-TX window if a global counter exists (one phase-lock unlocks all IDs); otherwise per-ID phase-lock is still cheap.
-- **`450` payload movement.** All 27k captured frames carry the same payload, so we can't say *anything* about `450` beyond "D7=0 here". A capture that moves `450`'s payload (likely engine-on with motion-related input variation) would let us test whether `450` follows `540`'s "D7 always zero" scheme or has its own movement we haven't seen yet.
+- ~~**`450` payload movement.** All 27k captured frames carry the same payload, so we can't say *anything* about `450` beyond "D7=0 here".~~ **Closed 2026-07-24** by [[2026-07-24-abs-mode-toggle]]: `450` D4 bit 7 moves on ride-mode toggle, giving two distinct payloads; D7 stays at `0x00` across both. Confirms `450` follows `540`'s "D7 always zero" scheme.
 
 ## Evidence
 

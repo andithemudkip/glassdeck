@@ -357,11 +357,13 @@ def main() -> int:
         action="store_true",
         help="Read SLCAN from stdin instead of a serial port. Intended for "
              "`websocat -n ws://<esp>/stream | capture.py --stdin --label <lbl>`. "
-             "Combines with --live / --experiment — the Textual TUI reads "
-             "keys from /dev/tty, so stdin stays free for frames. Incompatible "
-             "with --watch (rider-side watch has no reason to consume network "
-             "capture bytes). No silence-warn diagnostic — SLCAN reception "
-             "depends on whatever produced the stdin bytes, out of our control.",
+             "Hotkeys and the Textual TUI both read from /dev/tty, so stdin "
+             "stays free for frames — if /dev/tty isn't available (headless / "
+             "input redirected from a file) hotkeys are silently disabled. "
+             "Incompatible with --watch (rider-side watch has no reason to "
+             "consume network capture bytes). No silence-warn diagnostic — "
+             "SLCAN reception depends on whatever produced the stdin bytes, "
+             "out of our control.",
     )
     parser.add_argument("--label", default="capture", help="Session label (becomes part of logs/<date>-<label>/)")
     parser.add_argument("--bitrate", type=int, default=500_000, help="CAN bitrate in bps (must match firmware build)")
@@ -532,12 +534,6 @@ def main() -> int:
         sys.stderr.write(f"capture session: {session_dir}\n")
     source = "stdin" if args.stdin else args.port
     sys.stderr.write(f"source: {source}   bitrate: {args.bitrate} bps   firmware: {fw_rev or 'unknown'}\n")
-    if args.stdin and not args.live:
-        sys.stderr.write("stdin mode: hotkeys disabled. Ctrl-C or EOF to stop.\n\n")
-    elif args.live:
-        sys.stderr.write("live mode: keys go to the TUI via /dev/tty. q or Ctrl-C to stop.\n\n")
-    else:
-        sys.stderr.write("press '?' for hotkey legend, 'q' or Ctrl-C to stop.\n\n")
 
     events: EventLogger | NullEventLogger
     if args.watch:
@@ -556,13 +552,16 @@ def main() -> int:
     last_status = 0.0
     ts_normalizer = TimestampNormalizer()
 
-    # Textual's Unix driver reads keys from fd 0. In --stdin --live, fd 0 is
-    # the SLCAN pipe (e.g. `websocat | capture.py --stdin --experiment ...`),
-    # so every printable byte in a CAN frame lands as a keypress → mark spam.
-    # Swap fd 0 to /dev/tty and let the capture loop read SLCAN from the
-    # original pipe via a saved fd.
+    # Both the KeyReader hotkeys and Textual's Unix driver read from fd 0.
+    # Under --stdin, fd 0 is the SLCAN pipe (e.g.
+    # `websocat | capture.py --stdin ...`), so every printable byte in a CAN
+    # frame would land as a keypress → mark spam. Swap fd 0 to /dev/tty and
+    # let the capture loop read SLCAN from the original pipe via a saved fd.
+    # If /dev/tty isn't available (headless / input redirected from a file),
+    # fall back to keys-disabled mode — live mode still requires a TTY.
     slcan_source = sys.stdin.buffer
-    if args.stdin and args.live:
+    stdin_hotkeys = False
+    if args.stdin:
         try:
             saved_stdin_fd = os.dup(0)
             tty_fd = os.open("/dev/tty", os.O_RDONLY)
@@ -570,8 +569,18 @@ def main() -> int:
             os.close(tty_fd)
             sys.stdin = os.fdopen(0, "r", buffering=1)
             slcan_source = os.fdopen(saved_stdin_fd, "rb", buffering=0)
+            stdin_hotkeys = True
         except OSError as e:
-            sys.exit(f"--stdin --live needs a controllable /dev/tty for the TUI: {e}")
+            if args.live:
+                sys.exit(f"--stdin --live needs a controllable /dev/tty for the TUI: {e}")
+            sys.stderr.write(f"no /dev/tty ({e}); stdin hotkeys disabled.\n")
+
+    if args.stdin and not args.live and not stdin_hotkeys:
+        sys.stderr.write("stdin mode: hotkeys disabled. Ctrl-C or EOF to stop.\n\n")
+    elif args.live:
+        sys.stderr.write("live mode: keys go to the TUI via /dev/tty. q or Ctrl-C to stop.\n\n")
+    else:
+        sys.stderr.write("press '?' for hotkey legend, 'q' or Ctrl-C to stop.\n\n")
 
     ser = None
     if not args.stdin:
@@ -726,13 +735,14 @@ def main() -> int:
             finally:
                 stop.set()
                 worker.join(timeout=2.0)
-        elif args.stdin:
-            # No KeyReader — stdin is consumed for data, not keystrokes.
+        elif args.stdin and not stdin_hotkeys:
+            # /dev/tty unavailable — no KeyReader, stdin was already the data pipe.
             capture_loop(on_status_cb=write_status_line)
         else:
+            # Serial or --stdin with /dev/tty successfully swapped onto fd 0.
             with KeyReader(events, stop):
                 capture_loop(
-                    on_silence_cb=write_silence,
+                    on_silence_cb=write_silence if not args.stdin else None,
                     on_status_cb=write_status_line,
                 )
     finally:

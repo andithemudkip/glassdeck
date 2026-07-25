@@ -45,5 +45,13 @@ require_cmd python3
 
 info "streaming ws://$host/stream → logs/*-$label/ (procedure: $procedure)"
 cd "$REPO_ROOT"
-websocat -n "ws://$host/stream" | python3 scripts/capture.py \
+# `: |` feeds websocat an empty pipe as stdin so it doesn't fight the
+# operator TUI for keys. `< /dev/null` would EINVAL websocat's fcntl on
+# macOS; a plain pipe fd is safe. `-n` keeps the WS open after the EOF.
+# On clean exit websocat prints "Broken pipe" / "error running" — filter
+# those; +pipefail so exit status follows capture.py, not websocat.
+set +o pipefail
+: | websocat -n "ws://$host/stream" \
+    2> >(grep -v -E "(Broken pipe|error running)" >&2) \
+  | python3 scripts/capture.py \
     --stdin --label "$label" --experiment "$procedure" "$@"

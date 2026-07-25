@@ -1,0 +1,51 @@
+name: abs-mode-toggle
+description: >
+  Minimal engine-off ROAD↔SUPERMOTO toggle hunt — baseline, navigate to ABS
+  screen, four SET-holds with settles. Auto-marked at each SET-hold start.
+  Scoped down from 2026-07-12-dash-inputs (trip reset + short-presses
+  retired as dash-internal).
+experiment: 2026-07-24-abs-mode-toggle
+
+# Timing convention: marks fire at STEP START — the moment the rider is
+# cued to begin the SET-hold. The bus broadcast is keyed off the press
+# edge, not the dash redraw.
+#
+# Wifi-bridge is bike-powered (ADR 0018): the ESP is off until key-on,
+# so capture starts after key-on. No pre-key-off silence window.
+#
+# Engine OFF throughout. If the first SET-hold produces no dash mode
+# change, the ABS ECU likely requires engine-on — press q, abort, and
+# re-run with starter + idle-settled steps added.
+#
+# 8 s settles between toggles comfortably exceed the 100 ms cycle of the
+# slowest slow-decay IDs.
+
+steps:
+  # ---------------------------------------------------------------- Setup
+  - prompt: "Key is already ON (wifi-bridge boots on ignition). Kill RUN, neutral, side stand down. Engine OFF throughout. Hands off the bike."
+    duration_secs: 30
+    mark: { key: mark, label: "post-key-on baseline (engine off)" }
+
+  # ------------------------------------------- Navigate to ABS screen
+  - prompt: "Use MODE short-presses to reach the ABS screen. The 4 s startup display already showed you the current mode — note it in session.md. Take your time."
+    duration_secs: 30
+
+  - prompt: "Get into position — finger on SET, ready to hold. Hands otherwise off the bike."
+    duration_secs: 8
+
+  # -------------------------------- Four toggles (round-trip to start)
+  - repeat: 4
+    steps:
+      - prompt: "Hold SET 3–5 s — toggle mode. If iter 1 shows NO mode change on the dash, press q to abort (engine-on required). If the dash FLASHES the mode indicator, that's a fault — abort and diagnose."
+        duration_secs: 10
+        countdown_from: 3
+        mark: { key: mode, label: "mode toggle {iter} of {loop_count} (SET-hold start)" }
+      - prompt: "Settle — hands off, let the bus quiet down."
+        duration_secs: 8
+
+  # ----------------------------------------------------------- Shutdown
+  - prompt: "Key OFF now. Hold 3 s of tail silence."
+    duration_secs: 6
+
+  - prompt: "Done. Press q to stop capture and fill in session.md (starting mode, whether toggle took effect, any dash anomalies)."
+    duration_secs: null

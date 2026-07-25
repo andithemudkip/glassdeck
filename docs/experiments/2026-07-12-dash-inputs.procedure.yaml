@@ -1,10 +1,8 @@
 name: dash-inputs
 description: >
-  Phase A ROAD↔SUPERMOTO toggle, Phase B trip reset, Phase C dash button
-  short presses — bracketed clean windows, auto-marked at each phase
-  event. Key-on, engine-OFF for cleanest per-window bit diffs on the
-  slow-decay group. Throttle work + engine-on timeline live in
-  2026-07-12-neutral-rpm-sweep.
+  SUPERSEDED 2026-07-24 before execution — see the .md. Phases B and C
+  retired as dash-internal by architecture; Phase A lives on in
+  2026-07-24-abs-mode-toggle.
 experiment: 2026-07-12-dash-inputs
 
 # Timing convention: marks fire at STEP START — i.e. the moment the rider is

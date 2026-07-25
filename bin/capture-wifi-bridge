@@ -37,4 +37,19 @@ require_cmd python3
 
 info "streaming ws://$host/stream → logs/*-$label/"
 cd "$REPO_ROOT"
-websocat -n "ws://$host/stream" | python3 scripts/capture.py --stdin --label "$label" "$@"
+# `: |` feeds websocat an empty pipe as stdin so it doesn't fight capture.py
+# for terminal keys. websocat is bidirectional by default — without this, it
+# steals hotkeys (t, ?, q …) off the TTY and ships them uselessly up the WS.
+# `< /dev/null` would look equivalent but websocat fcntl's stdin on macOS
+# and errors with EINVAL on character devices; a plain pipe fd is fine.
+# `-n` keeps the WS connection alive after the immediate EOF.
+#
+# When capture.py exits (q / Ctrl-C), websocat's next WS→pipe write gets
+# EPIPE and it prints "Broken pipe" + "error running" to stderr. Filter
+# those specific lines — real connect / protocol errors still surface.
+# `set +o pipefail` on this pipeline: exit status follows capture.py, not
+# websocat's SIGPIPE on shutdown.
+set +o pipefail
+: | websocat -n "ws://$host/stream" \
+    2> >(grep -v -E "(Broken pipe|error running)" >&2) \
+  | python3 scripts/capture.py --stdin --label "$label" "$@"

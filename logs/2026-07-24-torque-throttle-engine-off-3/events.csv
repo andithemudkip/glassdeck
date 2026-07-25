@@ -1,0 +1,4 @@
+timestamp_iso,timestamp_monotonic,key,label
+2026-07-24T14:35:46.285248+00:00,17418.110082,throttle,throttle blip
+2026-07-24T14:37:08.317132+00:00,17500.141094,throttle,throttle blip
+2026-07-24T14:37:28.943724+00:00,17520.767471,throttle,throttle blip

@@ -5,6 +5,7 @@ established_by:
   - 2026-06-17-engine-idle-baseline-x3
   - 2026-06-23-engine-driven-rear-spin
   - 2026-07-22-first-moving-ride
+  - 2026-07-24-torque-throttle-threshold-engine-off
 references:
   - ktm-can-decoder
 ---
@@ -75,9 +76,40 @@ Working estimate: **1 LSB ≈ 0.25 N·m**, converging from four independent argu
 
 The three arguments converge to 0.2-0.25 N·m/LSB. A controlled coast-down capture (see [[2026-07-23-coast-down]]) will pin this to a single number.
 
+## Range and clamps
+
+**Positive clamp at +172** (hard saturation, engine-on). Full histogram of `121` D0:D1 across the 46 301-frame moving-ride corpus shows values walking naturally up to +160, then a complete zero-count gap 161–171, then a spike of 167 frames at exactly +172 and nothing above:
+
+```
+160: █████ (5)
+161-171: (0)          ← gap
+172: ██████████████████████████████████████████████ (167)   ← clamp
+173+: (0)
+```
+
+At LSB ≈ 0.25 N·m this is ~43 N·m — the Svartpilen 401 spec peak is 37 N·m, so the clamp sits just past physical peak. Signature is textbook saturation: a natural walk-up, an unreachable range, a spike at the ceiling.
+
+**No negative clamp in the observed range.** The negative tail runs continuously without discontinuity down to the minimum-ever-observed −40 in the same corpus (−22: 282 frames, −34: 28, −36: 117, −38: 70, −40: 1). Whether the ECU has a floor below −40 is unknown — no ride so far has produced enough overrun / shift-cut magnitude to bump it.
+
+**The engine-off two-state values (+166 / −36) are neither of these clamps** — see next section.
+
 ## Idle behaviour
 
-At warm idle: torque wobbles around 0 with σ ~0.5-1.0 LSB (< 0.25 N·m of noise). Consistent across all three 2026-06-17 idle baseline captures. This is the physically expected value — the engine is producing exactly enough torque to overcome friction, so net torque at the crank ~ 0. Engine-off, both channels hold at a stable positive bias (D0:D1 ≈ +170, D2:D3 ≈ +465) — a different ECU computation path with the engine not running; the D2:D3/D0:D1 ratio ≈ 2.75 stays constant across all four engine-off windows, but this regime is not the operating semantic.
+At warm idle: torque wobbles around 0 with σ ~0.5-1.0 LSB (< 0.25 N·m of noise). Consistent across all three 2026-06-17 idle baseline captures. This is the physically expected value — the engine is producing exactly enough torque to overcome friction, so net torque at the crank ~ 0.
+
+**Engine-off is a two-state signal, not a bias** ([[2026-07-24-torque-throttle-threshold-engine-off]]):
+- D0:D1 = exactly **+166** when `120` D2 (rider throttle) < 234.
+- D0:D1 = exactly **−36** when `120` D2 ≥ 234 (≈92 % grip) held for ~500 ms. Exit is immediate on throttle release; no latch.
+- No intermediate values ever observed — strictly binary switch.
+- No sibling mode bit anywhere on the bus co-transitions. D2:D3 stays pinned at +463 in both states; the twin-channel-tracks-within-1-LSB claim (see below) is engine-*on* only.
+
+Interpretation: the ECU is computing D0:D1 as "predicted torque under the current fuel-and-ignition policy", and the policy switches to a fuel-cut precondition at high throttle with dwell. Signature matches the arming preview for a flood-clear / no-fuel-start mode, though whether the fuel-cut actually applies during cranking is untested (engine did not start in that experiment). This engine-off regime is not the operating semantic; it's here as a caveat so downstream tooling doesn't treat +166 as the sole engine-off value.
+
+**Neither +166 nor −36 is an operational clamp** (established by histogram of the moving-ride corpus, see [Range and clamps](#range-and-clamps)). +166 never appears in engine-on data — 0 of 46 301 frames — and sits 6 counts below the actual positive clamp at +172. −36 is a common value in the natural overrun / shift-cut tail (117 hits) but the distribution continues smoothly past it to −40 with no gap or spike. Under LSB ≈ 0.25 N·m the values decode as:
+- +166 → 41.5 N·m: the ECU's prediction of "engine torque at current inputs if the engine were running normally at nominal peak-operating conditions" — near the physical peak because throttle < 234 with no fuel-cut policy is a naive-max scenario.
+- −36 → −9 N·m: pumping-loss magnitude for a 400 cc single at low RPM, matching what the crank would produce with fuel cut and no combustion.
+
+So both engine-off values are state-specific ECU-precomputed predictions on the same underlying "predicted torque under current policy" signal — not sentinels, not saturation, not clamps.
 
 ## What was ruled out along the way
 

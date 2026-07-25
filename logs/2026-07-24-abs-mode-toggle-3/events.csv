@@ -1,0 +1,6 @@
+timestamp_iso,timestamp_monotonic,key,label
+2026-07-24T15:21:42.532389+00:00,20174.395878,mark,post-key-on baseline (engine off)
+2026-07-24T15:22:50.634582+00:00,20242.497930,mode,mode toggle 1 of 4 (SET-hold start)
+2026-07-24T15:23:08.734516+00:00,20260.597805,mode,mode toggle 2 of 4 (SET-hold start)
+2026-07-24T15:23:26.835031+00:00,20278.698276,mode,mode toggle 3 of 4 (SET-hold start)
+2026-07-24T15:23:45.033766+00:00,20296.896967,mode,mode toggle 4 of 4 (SET-hold start)

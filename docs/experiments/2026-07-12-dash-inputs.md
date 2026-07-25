@@ -1,6 +1,6 @@
 ---
 date: 2026-07-12
-status: planned
+status: superseded
 phase: 1
 related:
   findings:
@@ -15,10 +15,23 @@ related:
     - 2026-07-12-neutral-rpm-sweep
   supersedes:
     - 2026-06-18-engine-on-stationary-inputs
+  superseded_by:
+    - 2026-07-24-abs-mode-toggle
   logs: []
 ---
 
 # Dash inputs — ROAD/SUPERMOTO toggle, trip reset, MODE/SET short presses (key-on, engine-off)
+
+**Superseded 2026-07-24 before execution** by [2026-07-24-abs-mode-toggle](2026-07-24-abs-mode-toggle.md). Kept as a record of the scoping decision.
+
+Two of the three phases planned here were retired on architectural grounds:
+
+- **Phase B (trip reset)** — the trip counter lives on the cluster; no other module needs it, so the reset event is almost certainly dash-internal and never crosses the bus. Running the phase would most likely yield a null result that we can't distinguish from "we missed it."
+- **Phase C (MODE/SET short-presses)** — these drive the cluster's own display state machine (which screen is showing, which sub-menu). On a simple 390-platform bike (ECU + ABS + cluster, no body-controller module), there's no obvious consumer for those events on CAN. Same null-vs-missed ambiguity.
+
+**Phase A (ROAD↔SUPERMOTO toggle) is the one that must be on the bus** — the ABS ECU is a separate module and needs to know the mode. It lives on as its own minimal engine-off experiment (see superseded_by). If any incidental "button pressed" bit surfaces in that session's diff, that's the trigger to design a dedicated short-press / trip-reset follow-up — otherwise treat those events as dash-internal and move on.
+
+---
 
 Split half of the original engine-on-stationary batch. The throttle blip and neutral-RPM sweep now live in [2026-07-12-neutral-rpm-sweep](2026-07-12-neutral-rpm-sweep.md); this experiment covers only cluster-side inputs, engine-off for cleanest per-window diffs.
 
