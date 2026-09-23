@@ -1,0 +1,278 @@
+name: qs-bits-lever-strain-engine-off
+description: >
+  Engine-off shift-lever loading — press holds, force ladder, escalation to a
+  completed shift, and a worked upshift-silence battery — to characterise the
+  121 D6 bits and their direction asymmetry.
+experiment: 2026-08-02-qs-bits-lever-strain-engine-off
+
+# Timing convention: marks fire at STEP START, i.e. when the rider is cued to
+# begin loading the lever. Actual onset and duration come from the D6 bit trace
+# — the mark only says which trial a window belongs to.
+#
+# The rider's foot is on the lever and hands are on the bars/clutch throughout,
+# so there are NO hotkey marks. See [[experiment-design-hand-driven-marks]].
+#
+# Wifi-bridge is bike-powered: key is already ON. No pre-key-off silence window.
+#
+# ENGINE OFF THROUGHOUT, side stand DOWN, stationary, kill switch RUN.
+#
+# "Gentle" = enough force to feel the lever load, NOT enough to move the drum.
+# A hold that accidentally completes a shift is still data — note it in
+# session.md and carry on; the gear enum will show it.
+#
+# PRESS is the primary axis (rider reports it holds the bits for 500 ms+).
+# LIFT is a NEGATIVE claim — rider reports it does nothing engine-off — so
+# phase 5 works it hard across three gears and three force levels and finishes
+# with completed upshifts. A negative reported off two casual attempts is not
+# worth writing down; a negative that survives this battery is.
+#
+# Settles are 8 s so each hold sits in an unambiguous window: the slowest
+# always-on ID cycles at 100 ms, so 8 s is ~80 clean frames of floor either side.
+
+steps:
+  # ------------------------------------------------------------- Setup + baseline
+  - prompt: "Key ON, kill RUN, ENGINE OFF, side stand DOWN. Get the bike into 3RD — rock it / spin the rear wheel while loading the lever. Take your time."
+    duration_secs: 60
+
+  - prompt: "CONFIRM live view reads gear 3. Then hands AND feet completely off the bike — this is the D6 = 0x00 floor."
+    duration_secs: 20
+    mark: { key: mark, label: "baseline — 3rd, no lever contact" }
+
+  # ------------------------------------------------------------- Phase 1: press holds in 3rd
+  - prompt: "PHASE 1 — gentle PRESS holds in 3rd. Three holds. Foot ready on the lever, do not press yet."
+    duration_secs: 8
+
+  - prompt: "PRESS gently, hold ~1 s, release. Do not let the gear change."
+    duration_secs: 10
+    countdown_from: 3
+    mark: { key: gear, label: "P1 press 1s (3rd)" }
+
+  - prompt: "Foot off. Settle."
+    duration_secs: 8
+
+  - prompt: "PRESS gently, hold ~3 s, release. Do not let the gear change."
+    duration_secs: 12
+    countdown_from: 3
+    mark: { key: gear, label: "P1 press 3s (3rd)" }
+
+  - prompt: "Foot off. Settle."
+    duration_secs: 8
+
+  - prompt: "PRESS gently, hold ~5 s, release. Hold as steady as you can — this is the long-hold reproduction."
+    duration_secs: 14
+    countdown_from: 3
+    mark: { key: gear, label: "P1 press 5s (3rd)" }
+
+  - prompt: "Foot off. Settle."
+    duration_secs: 8
+
+  # ------------------------------------------------------------- Phase 2: force ladder
+  - prompt: "PHASE 2 — force ladder, PRESS only, four holds of ~3 s. Looking for the force at which the bits first appear."
+    duration_secs: 8
+
+  - prompt: "BARELY TOUCHING — foot resting on the lever, almost no force. Hold ~3 s."
+    duration_secs: 12
+    countdown_from: 3
+    mark: { key: gear, label: "P2 force 1/4 barely touching" }
+
+  - prompt: "Foot off. Settle."
+    duration_secs: 8
+
+  - prompt: "LIGHT press — clearly loading the lever, very soft. Hold ~3 s."
+    duration_secs: 12
+    countdown_from: 3
+    mark: { key: gear, label: "P2 force 2/4 light" }
+
+  - prompt: "Foot off. Settle."
+    duration_secs: 8
+
+  - prompt: "MEDIUM press. Hold ~3 s."
+    duration_secs: 12
+    countdown_from: 3
+    mark: { key: gear, label: "P2 force 3/4 medium" }
+
+  - prompt: "Foot off. Settle."
+    duration_secs: 8
+
+  - prompt: "FIRM press — as hard as you can WITHOUT the gear changing. Hold ~3 s."
+    duration_secs: 12
+    countdown_from: 3
+    mark: { key: gear, label: "P2 force 4/4 firm, no shift" }
+
+  - prompt: "Foot off. Settle."
+    duration_secs: 8
+
+  # ------------------------------------------------------------- Phase 3: escalation to completion
+  # One continuous trace per trial: assert under gentle load, then smoothly
+  # increase until the gear drops, foot stays down 3 s past the change.
+  - prompt: "PHASE 3 — escalation, 3 trials. Each: press GENTLY until the bits show, hold ~2 s, then SMOOTHLY increase until the gear actually drops, and KEEP YOUR FOOT DOWN 3 s past the change before releasing."
+    duration_secs: 12
+
+  - repeat: 3
+    steps:
+      - prompt: "Escalation trial: gentle press ~2 s, then smoothly increase until the gear drops, hold 3 s past the change, release."
+        duration_secs: 22
+        countdown_from: 3
+        mark: { key: gear, label: "P3 escalation to completed downshift" }
+
+      - prompt: "Foot off. Settle. Then rock the bike back up to 3RD for the next trial."
+        duration_secs: 40
+
+  # ------------------------------------------------------------- Phase 4: upshift battery (the negative claim)
+  - prompt: "PHASE 4 — UPSHIFT battery. Rider reports lifting does nothing engine-off; this phase tries hard to break that. Confirm gear 3 first."
+    duration_secs: 15
+
+  - prompt: "In 3rd: LIFT gently, hold ~3 s, release."
+    duration_secs: 12
+    countdown_from: 3
+    mark: { key: gear, label: "P4 lift gentle (3rd)" }
+
+  - prompt: "Foot off. Settle."
+    duration_secs: 8
+
+  - prompt: "In 3rd: LIFT with MEDIUM force, hold ~3 s, release."
+    duration_secs: 12
+    countdown_from: 3
+    mark: { key: gear, label: "P4 lift medium (3rd)" }
+
+  - prompt: "Foot off. Settle."
+    duration_secs: 8
+
+  - prompt: "In 3rd: LIFT FIRMLY — as hard as you can without the gear changing. Hold ~3 s."
+    duration_secs: 12
+    countdown_from: 3
+    mark: { key: gear, label: "P4 lift firm (3rd)" }
+
+  - prompt: "Foot off. Settle. Then get the bike into 2ND."
+    duration_secs: 45
+
+  - prompt: "CONFIRM gear 2. LIFT firmly, hold ~3 s, release."
+    duration_secs: 14
+    countdown_from: 3
+    mark: { key: gear, label: "P4 lift firm (2nd)" }
+
+  - prompt: "Foot off. Settle. Then get the bike into 4TH."
+    duration_secs: 50
+
+  - prompt: "CONFIRM gear 4. LIFT firmly, hold ~3 s, release."
+    duration_secs: 14
+    countdown_from: 3
+    mark: { key: gear, label: "P4 lift firm (4th)" }
+
+  - prompt: "Foot off. Settle."
+    duration_secs: 8
+
+  - prompt: "Now THREE COMPLETED UPSHIFTS. Lift and rock the bike until the gear actually engages, keep the foot up 2 s past the change, release. Then repeat twice more, climbing gears."
+    duration_secs: 20
+
+  - repeat: 3
+    steps:
+      - prompt: "Completed upshift: lift and rock until the gear engages, hold 2 s past the change, release."
+        duration_secs: 30
+        countdown_from: 3
+        mark: { key: gear, label: "P4 completed upshift" }
+
+      - prompt: "Foot off. Settle."
+        duration_secs: 15
+
+  # ------------------------------------------------------------- Phase 5: press in other gears
+  - prompt: "PHASE 5 — is the press behaviour gear-specific? Get into 2ND and confirm the enum reads 2."
+    duration_secs: 50
+
+  - prompt: "In 2nd: PRESS gently, hold ~3 s, release. Do not let the gear change."
+    duration_secs: 12
+    countdown_from: 3
+    mark: { key: gear, label: "P5 press 3s (2nd)" }
+
+  - prompt: "Foot off. Settle. Then get into 4TH and confirm the enum reads 4."
+    duration_secs: 55
+
+  - prompt: "In 4th: PRESS gently, hold ~3 s, release. Do not let the gear change."
+    duration_secs: 12
+    countdown_from: 3
+    mark: { key: gear, label: "P5 press 3s (4th)" }
+
+  - prompt: "Foot off. Settle. Then get back into 3RD."
+    duration_secs: 45
+
+  # ------------------------------------------------------------- Phase 6: rapid taps
+  - prompt: "PHASE 6 — confirm gear 3, then 5 quick PRESS taps, about one per second. Short and sharp, no gear change."
+    duration_secs: 14
+    countdown_from: 3
+    mark: { key: gear, label: "P6 press taps x5 (3rd)" }
+
+  - prompt: "Foot off. Settle."
+    duration_secs: 8
+
+  - prompt: "5 quick LIFT taps, about one per second — the tap-speed counterpart to the upshift battery."
+    duration_secs: 14
+    countdown_from: 3
+    mark: { key: gear, label: "P6 lift taps x5 (3rd)" }
+
+  - prompt: "Foot off. Settle."
+    duration_secs: 8
+
+  # ------------------------------------------------------------- Phase 7: re-load after completion
+  - prompt: "PHASE 7 — re-load after a completed shift, 3 trials. Each: complete a downshift, FULLY RELEASE the lever, then immediately press gently again. Does it come back straight away?"
+    duration_secs: 12
+
+  - repeat: 3
+    steps:
+      - prompt: "Complete a downshift (press and rock until the gear drops), FULLY RELEASE, then immediately re-press gently and hold ~3 s."
+        duration_secs: 30
+        countdown_from: 3
+        mark: { key: gear, label: "P7 re-load after completed downshift" }
+
+      - prompt: "Foot off. Settle. Then rock back up to 3RD for the next trial."
+        duration_secs: 40
+
+  # ------------------------------------------------------------- Phase 8: neutral control
+  - prompt: "PHASE 8 — neutral control. Get the bike into NEUTRAL and confirm gear N in the live view."
+    duration_secs: 45
+
+  - prompt: "In NEUTRAL: PRESS gently, hold ~3 s, release. (Do not let it drop into 1st.)"
+    duration_secs: 12
+    countdown_from: 3
+    mark: { key: neutral, label: "P8 neutral press 3s" }
+
+  - prompt: "Foot off. Settle."
+    duration_secs: 8
+
+  - prompt: "In NEUTRAL: LIFT gently, hold ~3 s, release."
+    duration_secs: 12
+    countdown_from: 3
+    mark: { key: neutral, label: "P8 neutral lift 3s" }
+
+  - prompt: "Foot off. Settle. Then get the bike back into 3RD for the last phase."
+    duration_secs: 45
+
+  # ------------------------------------------------------------- Phase 9: clutch cross
+  - prompt: "PHASE 9 — clutch cross. Confirm gear 3. Three trials with the clutch held in. Say aloud whether the live-view CLUTCH bit registers each time — it goes in session.md."
+    duration_secs: 15
+
+  - repeat: 3
+    steps:
+      - prompt: "PUMP the clutch until the live-view CLUTCH bit reads 1, then HOLD it in."
+        duration_secs: 18
+        countdown_from: 3
+        mark: { key: clutch, label: "P9 clutch held" }
+
+      - prompt: "Clutch STILL HELD: gentle PRESS on the lever, hold ~3 s, release lever then clutch."
+        duration_secs: 14
+        countdown_from: 3
+        mark: { key: gear, label: "P9 press 3s under held clutch" }
+
+      - prompt: "Everything off. Settle."
+        duration_secs: 10
+
+  # ------------------------------------------------------------- Closing baseline
+  - prompt: "Hands and feet completely off the bike — closing floor window, pairs with the opening baseline."
+    duration_secs: 20
+    mark: { key: mark, label: "closing baseline — no lever contact" }
+
+  # ------------------------------------------------------------- Shutdown
+  - prompt: "Key OFF now. Hold 5 s of tail silence."
+    duration_secs: 8
+
+  - prompt: "Done. Press q to stop capture, then fill in session.md — note any hold that accidentally completed a shift, how the lever FELT on lift vs press, and which P9 trials had the clutch bit register."
+    duration_secs: null

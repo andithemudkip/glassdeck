@@ -43,7 +43,7 @@ python scripts/capture.py --port /dev/cu.usbmodem101 --label kill \
     --experiment docs/experiments/<slug>.procedure.yaml                          # rider-driven
 ```
 
-`capture.py` parses the firmware's SLCAN line stream directly into `can.Message` objects (see ADR 0004 Update 2026-06-17). On exit it writes `capture.log`, `events.csv`, and a `session.md` stub — **fill the stub in** before walking away. See `python scripts/capture.py --help` for the full flag list.
+`capture.py` parses the firmware's SLCAN line stream directly into `can.Message` objects (see ADR 0004 Update 2026-06-17). On exit it writes `capture.log`, `events.csv`, `bus_status.log`, and a `session.md` stub — **fill the stub in** before walking away. See `python scripts/capture.py --help` for the full flag list.
 
 ## Dependencies
 

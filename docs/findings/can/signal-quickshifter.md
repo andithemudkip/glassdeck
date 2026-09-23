@@ -68,7 +68,14 @@ No upshift set bit 1, no downshift set bit 0 alone. Bit 1 is a clean "downshift"
 - Overall duty of `121` D6 bit 0 across the ride: **0.46 %** (212 frames set across ~ 46 000 `121` frames).
 - **100 % of those set frames** fall inside a ±400 ms shift window. Zero out-of-window fires.
 
-Bit 0 is a genuine shift-event flag — not a byproduct of some other varying signal on `121`, and not triggered outside shifts.
+Bit 0 is a genuine shift-event flag — not a byproduct of some other varying signal on `121`.
+
+**"Not triggered outside shifts" does not survive contact with stationary testing.** That corpus contained no stationary lever-loading, so it could only ever show that the bit doesn't fire spuriously *while riding*. Rider live-view observation on 2026-08-02 (uncaptured, pending [[2026-08-02-qs-bits-lever-strain-engine-off]]), **engine off, in gear, stationary**:
+
+- Gentle **downward** lever pressure asserts the bits, held for **500 ms+** against the 60 ms median measured here — but only while the shift does **not** complete. Push through to an actual gear change and the assertion ends.
+- **Upward (upshift-direction) movement does nothing at all.** This is the sharper observation, because the up/down partitioning below is perfectly symmetric on ride data (31/31 and 25/25) — so whatever suppresses the upshift path engine-off is absent when the engine runs.
+
+If that reproduces on the bus, three things need rewriting: the 60 ms "cut duration" measures how long the mechanism stays loaded, not an ECU-fixed cut window; bit 1 cannot be an *executed* auto-blip (no engine to blip); and the two-independent-flags reading here is in question, since a `0x00 / 0x01 / 0x03` **enum** with per-state preconditions explains a direction-conditional silence more naturally.
 
 ## Cross-walk vs KTM
 

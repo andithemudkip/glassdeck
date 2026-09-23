@@ -5,7 +5,8 @@ Opens the ESP32-S3's USB-CDC serial port with pyserial, parses incoming
 SLCAN (Lawicel ASCII) lines into `can.Message` objects, writes them to
 `logs/<date>-<label>/capture.log` in candump format with host timestamps,
 and lets you press hotkeys during the session to mark rider actions into a
-sidecar `events.csv`. On exit, drops a `session.md` stub for you to fill in.
+sidecar `events.csv`. The firmware's `# …` health lines are teed to
+`bus_status.log`. On exit, drops a `session.md` stub for you to fill in.
 
 The firmware is firmware→host only (ADR 0004); python-can's `slcan`
 interface assumes a Lawicel adapter that answers config commands and
@@ -225,6 +226,39 @@ class NullEventLogger:
         self.count = 0
 
     def log(self, key: str, label: str) -> None:
+        self.count += 1
+
+    def close(self) -> None:
+        pass
+
+
+class BusStatusLogger:
+    """Append-only writer for bus_status.log — the firmware's `# …` health
+    lines, which carry bus_err / rx_missed / rx_overrun.
+
+    A bus degraded by bad termination and a healthy one produce identical
+    capture.log files; the health counters are the only place that difference
+    shows up. Stamped with the same monotonic clock as events.csv so a rise can
+    be located against a mark."""
+
+    def __init__(self, path: Path) -> None:
+        self._file = path.open("w")
+        self.count = 0
+
+    def log(self, line: str) -> None:
+        self._file.write(f"{time.monotonic():.6f} {line}\n")
+        self._file.flush()
+        self.count += 1
+
+    def close(self) -> None:
+        self._file.close()
+
+
+class NullBusStatusLogger:
+    def __init__(self) -> None:
+        self.count = 0
+
+    def log(self, line: str) -> None:
         self.count += 1
 
     def close(self) -> None:
@@ -599,9 +633,11 @@ def main() -> int:
 
     if args.watch:
         writer = _NullCanLogger()
+        bus_status = NullBusStatusLogger()
     else:
         assert session_dir is not None
         writer = can.Logger(filename=str(session_dir / "capture.log"))
+        bus_status = BusStatusLogger(session_dir / "bus_status.log")
 
     # The capture loop is wrapped in a small inner function so it can run
     # either in the main thread (default — KeyReader handles input + stderr
@@ -647,6 +683,10 @@ def main() -> int:
                         unique_ids.add(msg.arbitration_id)
                         if on_frame_cb is not None:
                             on_frame_cb(ts, msg.arbitration_id, bytes(msg.data))
+                    else:
+                        stripped = line.strip(b"\r\n\x00 \t")
+                        if stripped.startswith(b"#"):
+                            bus_status.log(stripped.decode("ascii", "replace"))
 
                 now = time.monotonic()
                 elapsed = now - start_time
@@ -757,6 +797,7 @@ def main() -> int:
             except Exception:
                 pass
         events.close()
+        bus_status.close()
 
     end_iso = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
     if args.watch:

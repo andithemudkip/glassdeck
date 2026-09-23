@@ -1,0 +1,131 @@
+name: torque-engine-off-gear-dependence
+description: >
+  Engine-off matrix over gear x side-stand x clutch, each cell probed with a
+  slow throttle sweep, to decide whether 121 D0:D1 pins at -36 because of gear
+  or because of start-inhibit.
+experiment: 2026-08-02-torque-engine-off-gear-dependence
+
+# Timing convention: marks fire at STEP START. Steady-state cells are read from
+# the middle of their window, so a mark that leads the settled state by a second
+# or two costs nothing.
+#
+# Wifi-bridge is bike-powered: key is already ON when the capture host connects.
+# No pre-key-off silence window. See [[feedback-wifi-bridge-procedures-key-on-start]].
+#
+# ENGINE OFF THROUGHOUT. Kill switch stays in RUN so the bus is in its normal
+# key-on state; the starter is never pressed.
+#
+# The rider's hands are on the grip and the clutch lever for most of this, so
+# there are no hotkey marks — every window boundary is a procedure step.
+#
+# Sweeps are slow and hand-driven on purpose: 120 D2 broadcasts every 20 ms, so
+# an ~8 s ramp samples nearly every raw throttle count on the way through and
+# resolves the threshold far better than the rider could by hand.
+#
+# Phase A is the reference cell — it replicates 2026-07-24. If A does not show
+# +166 flipping to -36 at throttle >= 234, STOP: something differs from that
+# session and the rest of the matrix is uninterpretable until it is explained.
+
+steps:
+  # ------------------------------------------------------------- Phase A: N, stand down
+  - prompt: "Key ON, kill RUN, ENGINE OFF, NEUTRAL, side stand DOWN. Confirm live view shows gear N and 121 D0:D1 = +166. Hands off."
+    duration_secs: 20
+    mark: { key: mark, label: "A baseline — N / stand down / throttle 0" }
+
+  - prompt: "A sweep: roll throttle 0 to FULL over ~8 s, hold FULL 3 s, roll back to 0 over ~8 s. One smooth motion."
+    duration_secs: 22
+    mark: { key: throttle, label: "A sweep — N / stand down" }
+
+  - prompt: "Hands off. Settle."
+    duration_secs: 10
+
+  # ------------------------------------------------------------- Phase B: N, stand up
+  - prompt: "PHASE B — sit on the bike, bike upright, feet down, side stand UP. Still NEUTRAL, engine off. Confirm stand-up in live view. Hands off the grip."
+    duration_secs: 25
+    mark: { key: sidestand, label: "B baseline — N / stand UP / throttle 0" }
+
+  - prompt: "B sweep: 0 to FULL over ~8 s, hold 3 s, back to 0 over ~8 s."
+    duration_secs: 22
+    mark: { key: throttle, label: "B sweep — N / stand up" }
+
+  - prompt: "Hands off. Settle. Then put the side stand back DOWN and dismount."
+    duration_secs: 15
+
+  # ------------------------------------------------------------- Phase C: 3rd, stand down
+  - prompt: "PHASE C — get the bike into 3RD, engine off: rock the bike / spin the rear wheel while loading the lever. Take as long as you need. Side stand DOWN."
+    duration_secs: 60
+
+  - prompt: "CONFIRM live view reads gear 3 before continuing. If it does not, use the extra time to keep working the lever. Hands off once it reads 3."
+    duration_secs: 25
+    mark: { key: gear, label: "C baseline — 3rd / stand down / throttle 0" }
+
+  - prompt: "C sweep: 0 to FULL over ~8 s, hold 3 s, back to 0 over ~8 s. Watch whether 121 D0:D1 moves at all."
+    duration_secs: 22
+    mark: { key: throttle, label: "C sweep — 3rd / stand down" }
+
+  - prompt: "Hands off. Settle."
+    duration_secs: 10
+
+  # ------------------------------------------------------------- Phase C2: 1st, stand down
+  - prompt: "PHASE C2 — shift down to 1ST (rock the bike as needed). Side stand still DOWN. Confirm gear 1 in live view, then hands off."
+    duration_secs: 50
+    mark: { key: gear, label: "C2 baseline — 1st / stand down / throttle 0" }
+
+  - prompt: "C2 sweep: 0 to FULL over ~8 s, hold 3 s, back to 0 over ~8 s."
+    duration_secs: 22
+    mark: { key: throttle, label: "C2 sweep — 1st / stand down" }
+
+  - prompt: "Hands off. Settle. Then get the bike back into 3RD for the next phases."
+    duration_secs: 45
+
+  # ------------------------------------------------------------- Phase D: 3rd, stand up, clutch pulled
+  # The deciding cell. A trial where the clutch bit never registers is DISCARDED,
+  # not counted as evidence — the switch on this bike is unreliable and the ECU
+  # reads the same one we do. See [[project-clutch-sensor-unreliable]].
+  - prompt: "PHASE D — confirm gear 3. Sit on the bike, upright, feet down, side stand UP. Engine off."
+    duration_secs: 30
+
+  - repeat: 3
+    steps:
+      - prompt: "PUMP the clutch lever until the live view CLUTCH bit reads 1, then HOLD it in. Say aloud whether it registered — it goes in session.md."
+        duration_secs: 20
+        countdown_from: 3
+        mark: { key: clutch, label: "D{iter} of {loop_count} — 3rd / stand up / clutch held" }
+
+      - prompt: "Sweep with the clutch STILL HELD IN. Roll throttle 0 to FULL over ~8 s, hold 3 s, back to 0 over ~8 s."
+        duration_secs: 22
+        mark: { key: throttle, label: "D{iter} sweep — 3rd / stand up / clutch held" }
+
+      - prompt: "Release the clutch. Hands off. Settle."
+        duration_secs: 12
+
+  # ------------------------------------------------------------- Phase E: 3rd, stand up, clutch out
+  - prompt: "PHASE E — paired control for D. Still seated, side stand UP, gear 3, CLUTCH OUT (released). Hands off."
+    duration_secs: 20
+    mark: { key: mark, label: "E baseline — 3rd / stand up / clutch out / throttle 0" }
+
+  - prompt: "E sweep: 0 to FULL over ~8 s, hold 3 s, back to 0 over ~8 s."
+    duration_secs: 22
+    mark: { key: throttle, label: "E sweep — 3rd / stand up / clutch out" }
+
+  - prompt: "Hands off. Settle. Then side stand DOWN, dismount, put the bike in NEUTRAL."
+    duration_secs: 40
+
+  # ------------------------------------------------------------- Phase A': replicate the reference
+  - prompt: "PHASE A' — back to the start conditions: NEUTRAL, stand DOWN, engine off. Confirm gear N. Hands off. This re-reads the reference cell at the END of the session, so a drifting battery or ECU state shows up as an A/A' mismatch."
+    duration_secs: 20
+    mark: { key: neutral, label: "A' baseline — N / stand down / throttle 0 (end-of-session replicate)" }
+
+  - prompt: "A' sweep: 0 to FULL over ~8 s, hold 3 s, back to 0 over ~8 s."
+    duration_secs: 22
+    mark: { key: throttle, label: "A' sweep — N / stand down (replicate)" }
+
+  - prompt: "Hands off. Final settle."
+    duration_secs: 12
+
+  # ------------------------------------------------------------- Shutdown
+  - prompt: "Key OFF now. Hold 5 s of tail silence."
+    duration_secs: 8
+
+  - prompt: "Done. Press q to stop capture, then fill in session.md — especially WHICH D trials had the clutch bit actually register."
+    duration_secs: null

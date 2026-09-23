@@ -78,13 +78,14 @@ Cell legend:
 
 ## Quick stats
 
-After the 2026-06-30 corpus sweep:
+Recounted from the per-ID table above, post-2026-07-24 (percentages rounded
+independently, so they sum to 101):
 
 | Category | Bytes | %  |
 |---|---:|---:|
-| Carries a primary signal (S or S◐) | 26 | 30 % |
+| Carries a primary signal (S or S◐) | 28 | 32 % |
 | Structural D7 hash (h)             |  9 | 10 % |
-| Always-zero across 15 sessions (0) | 44 | 50 % |
+| Always-zero across every observed condition (0) | 42 | 48 % |
 | Static non-zero constant           |  4 |  5 % |
 | Redundant mirror of decoded signal (dup) | 5 | 6 % |
 | Undecoded (?)                      |  0 |  0 % |
@@ -98,6 +99,6 @@ Whole-ID status:
 
 Bit-counting the unknowns is misleading — a single undecoded byte could carry one byte-wide quantity, or eight independent flags, or any mix. What we can say:
 
-- **Zero undecoded bytes remain — a first.** Down from 51 pre-2026-07-22. Uncharted structure now lives entirely inside the `S◐` cells (bits within partially-decoded bytes) and the 44 always-zero bytes (which could carry latent signals under untested inputs). No new arbitration ID will arrive: 800 679 + 386 271 frames across 15 sessions span every condition exercised and surface zero IDs outside the documented 11.
+- **Zero undecoded bytes remain — a first.** Down from 51 pre-2026-07-22. Uncharted structure now lives entirely inside the `S◐` cells (bits within partially-decoded bytes) and the 42 always-zero bytes (which could carry latent signals under untested inputs). No new arbitration ID will arrive: 800 679 + 386 271 frames across 15 sessions span every condition exercised and surface zero IDs outside the documented 11.
 - **No UDS / diagnostic side-channel.** Signals that only respond to UDS request (likely candidates: fuel level, odometer, fault codes — see [fuel-consumption-absent-from-broadcasts](../findings/can/fuel-consumption-absent-from-broadcasts.md), [battery-voltage-absent-from-always-on-broadcasts](../findings/can/battery-voltage-absent-from-always-on-broadcasts.md)) won't surface in passive captures regardless of how many bytes we work through.
 - **Always-zero is not the same as empty.** [byte-encoding-12-in-16](../findings/can/byte-encoding-12-in-16.md) shows a low nibble that read clean-zero engine-off and carried a real signal engine-on. A `0` cell becomes a `?` the first time an untested input flips it.

@@ -4,13 +4,13 @@ I'm building an open-source dashboard for my 2020 Husqvarna Svartpilen 401. It's
 
 Shout out to [ktm-can](https://github.com/blalor/ktm-can) for being a very useful resource at the start of this project, even though most signals didn't map out cleanly between bikes.
 
-Right now it's not a dashboard yet. It's a pile of CAN captures and a slowly growing map of what the OEM broadcasts on the diagnostic bus.
+Right now it's not a dashboard yet. It's a bunch of CAN captures and a map of what the OEM broadcasts on the diagnostic bus.
 
-## Why bother
+## Why bother?
 
-The stock dash is _fine_ but the small stuff adds up. One combined blinker icon instead of separate left/right (why). No phone connection. Convoluted menus that I still don't remember how to navigate after owning the bike for 3 years. Membrane buttons that are hard to press, which you also can't use unless you're at a full stop because they're mounted on the dashboard itself (smart) (not).
+The stock dash is _fine_ but the small stuff adds up. One combined blinker icon instead of separate left/right (why). No phone connection. Convoluted menus that I genuinely still don't remember how to navigate after owning the bike for 3 years. Membrane buttons that are hard to press, which you also can't use unless you're at a full stop because they're mounted on the dashboard itself (smart) (not).
 
-There are closed replacement dashes out there. None of them publish the CAN definitions they figured out, which means every person who wants to build something on this platform has to redo the reverse-engineering from scratch. That's the actual motivation. Even if I never finish the dashboard, having a public signal map for the 390 platform seemed worth doing.
+There are closed replacement dashes out there, however due to them being commercial products none of them publish the CAN definitions they figured out, which means every person who wants to build something on this platform has to redo the reverse-engineering from scratch. That's honestly the actual motivation. It's very likely I'll never finish the dashboard, but having a public signal map for the 390 platform seemed like a good first goal.
 
 ## What's decoded
 
@@ -46,8 +46,8 @@ Wiring, pinout, BOM: [`docs/hardware/`](docs/hardware/).
 
 Two subprojects (so far), both share code out of `firmware/lib/`:
 
-- [`firmware/can-logger/`](firmware/can-logger/) is the desk-tethered logger. SLCAN over USB. This is what produced every capture in `logs/` up until [`logs/2026-07-22-first-moving-ride`](logs/2026-07-22-first-moving-ride/).
-- [`firmware/wifi-bridge/`](firmware/wifi-bridge/) is the untethered version for moving captures. WiFi soft-AP, SLCAN over WebSocket, a browser live view at `http://192.168.4.1/`, and OTA reflash via `POST /ota`.
+- [`firmware/can-logger/`](firmware/can-logger/) - desk-tethered logger. SLCAN over USB. This is what produced every capture in `logs/` up until [`logs/2026-07-22-first-moving-ride`](logs/2026-07-22-first-moving-ride/).
+- [`firmware/wifi-bridge/`](firmware/wifi-bridge/) - untethered version for moving captures. WiFi soft-AP, SLCAN over WebSocket, a browser live view at `http://192.168.4.1/`, and OTA reflash via `POST /ota`.
 
 ESP-IDF via PlatformIO. Build/flash notes in [`firmware/README.md`](firmware/README.md).
 
@@ -59,7 +59,7 @@ Python stuff in [`scripts/`](scripts/). The three that got most use, at least in
 - `scripts/inventory_ids.py` gives per-ID frame counts, periods, active bytes.
 - `scripts/unknown_byte_sweep.py` does a corpus-wide correlation sweep against the known signals. It's how most of the mirror-byte and always-zero classifications got made.
 
-Operator guide (what to actually do on a capture day): [`docs/guides/capturing.md`](docs/guides/capturing.md).
+Operator guide (what to actually do for a capture session): [`docs/guides/capturing.md`](docs/guides/capturing.md).
 
 ## Quick start
 
@@ -73,8 +73,6 @@ If you have the parts and a 390-platform bike, you can be capturing in about 15 
    cd firmware/can-logger
    pio run -e logger -t upload
    ```
-
-   If you get silence at 500 kbps (though you shouldn't), try `-e logger-250k`.
 
 3. **Python side.** From the repo root:
 
@@ -124,7 +122,7 @@ firmware/                ESP32 subprojects (can-logger, wifi-bridge)
 ## Where to start reading
 
 - **You have a 390 platform bike and want the CAN map.** [`docs/signals/coverage.md`](docs/signals/coverage.md), then [`docs/findings/can/`](docs/findings/can/).
-- **You're doing your own CAN reverse-engineering on some other bike.** [`docs/experiments/`](docs/experiments/) and [`docs/decisions/`](docs/decisions/) are how I've been going about it. You might find that the methodology transfers even if the bike doesn't.
+- **You're doing your own CAN reverse-engineering on some other bike.** [`docs/experiments/`](docs/experiments/) and [`docs/decisions/`](docs/decisions/) are how I've been going about it. You might find that the methodology transfers. Not promising anything lol.
 
 ## Caveats
 
@@ -132,7 +130,7 @@ Any of this could be wrong. Findings marked `provisional` haven't been replicate
 
 ## AI usage
 
-I use Claude Code a lot on this. It writes a big chunk of the Python, drafts firmware, and I bounce analysis off it. Check out [`CLAUDE.md`](CLAUDE.md) for the setup I use.
+I use Claude Code quite a bit on this. It writes a big chunk of the Python, drafts firmware, and I bounce analysis off it. Check out [`CLAUDE.md`](CLAUDE.md) for the setup I use.
 
 The bike side is fully done by me, obviously: planning, riding, wiring, running captures, and deciding when a hypothesis is solid enough to become a finding. Even though I am a software engineer by trade, guiding Claude along rather than writing everything myself has proved immensely fruitful.
 

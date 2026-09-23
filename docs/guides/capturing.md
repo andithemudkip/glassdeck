@@ -471,6 +471,7 @@ The session dir holds:
 logs/<date>-<label>/
 ├── capture.log              raw frames, candump format (always)
 ├── events.csv               every keystroke + auto-mark (always)
+├── bus_status.log           firmware health lines: bus_err / rx_missed / rx_overrun (always)
 ├── session.md               header auto-populated; **you fill the body**
 ├── live_decode.csv          per-frame decoded values (only with --live)
 ├── snapshot-N.json          one per `.` press (only with --live)

@@ -97,7 +97,7 @@ At LSB ≈ 0.25 N·m this is ~43 N·m — the Svartpilen 401 spec peak is 37 N·
 
 At warm idle: torque wobbles around 0 with σ ~0.5-1.0 LSB (< 0.25 N·m of noise). Consistent across all three 2026-06-17 idle baseline captures. This is the physically expected value — the engine is producing exactly enough torque to overcome friction, so net torque at the crank ~ 0.
 
-**Engine-off is a two-state signal, not a bias** ([[2026-07-24-torque-throttle-threshold-engine-off]]):
+**Engine-off is a two-state signal, not a bias** ([[2026-07-24-torque-throttle-threshold-engine-off]]). **Scope: neutral only** — that capture was run in neutral with the side stand down throughout, and the throttle threshold below is only established for that state. Rider live-view observation on 2026-08-02 (uncaptured, pending [[2026-08-02-torque-engine-off-gear-dependence]]) is that **in gear, engine-off, D0:D1 reads −36 at all throttle positions** — no threshold behaviour at all. Do not treat the rule below as the general engine-off rule until that experiment runs.
 - D0:D1 = exactly **+166** when `120` D2 (rider throttle) < 234.
 - D0:D1 = exactly **−36** when `120` D2 ≥ 234 (≈92 % grip) held for ~500 ms. Exit is immediate on throttle release; no latch.
 - No intermediate values ever observed — strictly binary switch.
