@@ -28,6 +28,7 @@ bike-dash/
 │   │   ├── hardware/          confirmed hardware behavior
 │   │   └── bike/              bike-system behavior (ECU, dash, immobilizer)
 │   ├── hardware/              wiring, pinouts, BOM, schematics
+│   ├── images/                screenshots and build photos used by READMEs
 │   ├── references/            external sources, datasheets, third-party projects
 │   └── signals/               canonical CAN signal definitions (eventual .dbc)
 ├── logs/                      raw CAN captures, immutable

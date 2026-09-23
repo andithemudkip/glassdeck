@@ -4,7 +4,7 @@ I'm building an open-source dashboard for my 2020 Husqvarna Svartpilen 401. It's
 
 Shout out to [ktm-can](https://github.com/blalor/ktm-can) for being a very useful resource at the start of this project, even though most signals didn't map out cleanly between bikes.
 
-Right now it's not a dashboard yet. It's a bunch of CAN captures and a map of what the OEM broadcasts on the diagnostic bus.
+It's not a dashboard yet. It's a growing map of what the OEM broadcasts on the diagnostic bus.
 
 ## Why bother?
 
@@ -14,20 +14,41 @@ There are closed replacement dashes out there, however due to them being commerc
 
 ## What's decoded
 
-The bike puts out 11 arbitration IDs, 8 bytes each, at 500 kbps on the diagnostic port. 88 payload bytes total. So far, across 15 sessions and about 1.2M frames:
+The bike puts out 11 arbitration IDs, 8 bytes each, at 500 kbps on the diagnostic port. 88 payload bytes total. So far, across 25 sessions and about 1.37M frames:
 
-|                                                          | bytes |   % |
-| -------------------------------------------------------- | ----: | --: |
-| Decoded (primary signal, fully or partially)             |    28 | 32% |
-| D7 structural hash (6-cycle XOR ⊕ 5-bit GF(2) of D0..D6) |     9 | 10% |
-| Always zero everywhere                                   |    44 | 50% |
-| Static non-zero constant                                 |     4 |  5% |
-| Redundant mirror of a decoded signal                     |     3 |  3% |
-| Undecoded                                                |     0 |  0% |
+**Confirmed** — replicated across sessions, encoding pinned down.
 
-Confirmed signals: RPM, throttle, gear, clutch, front and rear wheel speed, coolant temp, side stand, kill switch (three redundant copies), engine torque, and engine on/off counters. Provisional: ABS lamp (with a mirror on `12E`), quickshifter cut/blip, shift-failed, fuel-injection setpoint, and a coarse rear-speed band.
+| Signal | Where | Encoding |
+| --- | --- | --- |
+| RPM | `120` D0:D1 | u16 BE, 1 rpm |
+| Throttle | `120` D2 | u8, closed 0, full scale 254 |
+| Engine torque | `121` D0:D1 | s16 BE, ~0.25 N·m/LSB (scale still provisional) |
+| Gear | `129` D0 b7:4 | enum, N and 1–6 |
+| Clutch | `129` D0 b3 | bool |
+| Ride mode | `12A` D2 b1 | bool, ROAD / SUPERMOTO (= rear ABS off) |
+| Side stand | `540` D3 b0 | bool |
+| Coolant temp | `540` D5:D6 | u16 BE, 0.1 °C |
+| Kill switch | `541` D2 b4 | bool |
+| Engine-on seconds | `541` D4 | u8, wraps at 256, 1 Hz |
+| Engine-off seconds | `541` D6 | u8, wraps at 256, 1 Hz |
 
-Zero undecoded bytes remain, but that's not the same as "fully mapped". Unknown structure still lives inside partially-decoded bytes (bits within an `S◐` cell) and behind the 44 always-zero bytes, some of which could carry latent signals under rider inputs we haven't exercised yet.
+**Provisional** — decoded, but thin evidence or an unanchored scale.
+
+| Signal | Where | Encoding |
+| --- | --- | --- |
+| Wheel speed, front | `12D` D0 + D1 b7:4 | 12-bit BE, 0.1 km/h |
+| Wheel speed, rear | `12D` D5:D6 | u16 BE, ~0.0565 km/h/LSB |
+| ABS lamp | `12A` D0 b4 | bool, high = lit |
+| Shift cut | `121` D6 b0 | bool, ECU ignition cut on shift |
+| Shift blip | `121` D6 b1 | bool, downshift auto-blip |
+| Shift failed | `129` D0 b1 | bool, fires ~1.5 s after a missed shift |
+| Fuel-injection setpoint | `540` D1 | u8, ECU base setpoint, recomputed ~1 Hz |
+
+Some of these are broadcast more than once: kill switch has two extra copies (`121` D5 b2, `5B0` D0 b4), engine torque a second channel at `121` D2:D3, ride mode a lagging mirror at `450` D4 b7, ABS lamp three more copies plus an inverted pair on `12E` D6, and each wheel speed a second copy elsewhere in `12D` at a different resolution. Either copy works as a source of truth.
+
+Of the 88 payload bytes: 28 carry a signal, 42 read `0x00` under every condition tested, 9 are the D7 structural hash (6-cycle XOR ⊕ 5-bit GF(2) of D0..D6), 5 are redundant mirrors, 4 are static constants, and 0 are undecoded.
+
+Zero undecoded bytes isn't the same as "fully mapped". Unknown structure still lives inside the partially-decoded bytes and behind the 42 always-zero ones, some of which could carry latent signals under rider inputs we haven't exercised yet. Three more slots are decoded but unattributed — `12A` D1 b2, a 3-state time bin at `541` D3, and a coarse 4-bit rear-speed band at `12D` D1 b3:0.
 
 Full map: [`docs/signals/coverage.md`](docs/signals/coverage.md). Encoding-authoritative source: [`docs/signals/signals.yaml`](docs/signals/signals.yaml). Per-signal writeups: [`docs/findings/can/`](docs/findings/can/).
 
@@ -40,6 +61,15 @@ The Aliexpress special:
 - TWAI on GPIO4 (TX) and GPIO5 (RX)
 - Powered off the bike's F7 12V accessory rail via a small buck
 
+<p align="center">
+  <img src="docs/images/adapter-bench.jpg" width="45%" alt="The adapter on the bench" />
+  <img src="docs/images/adapter-mounted.jpg" width="45%" alt="The adapter taped to the back of the bike" />
+</p>
+
+Buck on the left, transceiver in the middle, DevKitC-1 on the right. For ride captures it gets strapped to the grab handle at the rear of the bike, with the pigtail running under the passenger seat.
+
+![The adapter plugged into the diagnostic connector](docs/images/adapter-tail.jpg)
+
 Wiring, pinout, BOM: [`docs/hardware/`](docs/hardware/).
 
 ## Firmware
@@ -48,6 +78,16 @@ Two subprojects (so far), both share code out of `firmware/lib/`:
 
 - [`firmware/can-logger/`](firmware/can-logger/) - desk-tethered logger. SLCAN over USB. This is what produced every capture in `logs/` up until [`logs/2026-07-22-first-moving-ride`](logs/2026-07-22-first-moving-ride/).
 - [`firmware/wifi-bridge/`](firmware/wifi-bridge/) - untethered version for moving captures. WiFi soft-AP, SLCAN over WebSocket, a browser live view at `http://192.168.4.1/`, and OTA reflash via `POST /ota`.
+
+The live view has two modes. Diag shows every signal the build knows about, each cell tagged with the arb ID and bytes it decodes from, bus health along the top, and a `?` on anything still provisional:
+
+![The browser live view in diag mode](docs/images/live-view-diag.png)
+
+Ride cuts it down to what's worth looking at while moving: RPM, speed, gear, throttle, coolant, and the warning dots.
+
+![The browser live view in ride mode](docs/images/live-view-ride.png)
+
+Both are generated from [`docs/signals/signals.yaml`](docs/signals/signals.yaml) at build time, so the browser and the Python decoders can't drift apart. Cells can be hidden and reordered.
 
 ESP-IDF via PlatformIO. Build/flash notes in [`firmware/README.md`](firmware/README.md).
 
@@ -59,19 +99,24 @@ Python stuff in [`scripts/`](scripts/). The three that got most use, at least in
 - `scripts/inventory_ids.py` gives per-ID frame counts, periods, active bytes.
 - `scripts/unknown_byte_sweep.py` does a corpus-wide correlation sweep against the known signals. It's how most of the mirror-byte and always-zero classifications got made.
 
+`capture.py --live` puts a TUI up while the capture runs. Decoded signals at the top, what moved since the last mark below that, then a z-scored feed of anomalies in the bytes that aren't accounted for yet. Any signal or raw byte can be pinned to the watch pane with a sparkline:
+
+![The capture TUI](docs/images/live-view-tui.png)
+
+Most of the coverage map got built in front of this - pull a lever, see which byte reacts, mark it, repeat.
+
 Operator guide (what to actually do for a capture session): [`docs/guides/capturing.md`](docs/guides/capturing.md).
 
 ## Quick start
 
-If you have the parts and a 390-platform bike, you can be capturing in about 15 minutes.
+If you have the parts and a 390-platform bike, you can be capturing in about 15 minutes. The commands below use the wrappers in [`bin/`](bin/), run from the repo root.
 
 1. **Build the adapter.** DevKitC-1 + SN65HVD230, wired per [`docs/hardware/can-adapter.md`](docs/hardware/can-adapter.md). TX to GPIO4, RX to GPIO5. Plug into the diagnostic connector with the bike keyed off.
 
-2. **Flash the logger.** With [PlatformIO](https://platformio.org/):
+2. **Flash the logger.** Needs [PlatformIO](https://platformio.org/):
 
    ```
-   cd firmware/can-logger
-   pio run -e logger -t upload
+   bin/flash-usb can-logger
    ```
 
 3. **Python side.** From the repo root:
@@ -82,13 +127,13 @@ If you have the parts and a 390-platform bike, you can be capturing in about 15 
    pip install -r scripts/requirements.txt
    ```
 
-4. **Capture.** Key the bike on, find the port (`ls /dev/cu.usbmodem*` on macOS), then:
+4. **Capture.** Key the bike on, then:
 
    ```
-   python scripts/capture.py --port /dev/cu.usbmodem101 --label first-capture --live
+   bin/capture-usb first-capture --live
    ```
 
-   The TUI shows frames and decodes known signals live. `q` to stop, then fill in the `session.md` it writes (bike state, what you did, anything weird).
+   The port gets auto-detected; pass `--port` if you have more than one board plugged in. The TUI shows frames and decodes known signals live. `q` to stop, then fill in the `session.md` it writes (bike state, what you did, anything weird).
 
 5. **Sanity check.**
 
@@ -98,7 +143,13 @@ If you have the parts and a 390-platform bike, you can be capturing in about 15 
 
    You should see the 11 always-on IDs from the [coverage map](docs/signals/coverage.md) at the periods listed there. If you're missing one, something's off with the wiring or the bike's not fully awake.
 
-For ride captures, flash `firmware/wifi-bridge/` instead and pipe the WebSocket into `scripts/capture.py --stdin`. See [`firmware/wifi-bridge/README.md`](firmware/wifi-bridge/README.md). Since the laptop's gone at that point, the adapter runs off the bike's switched 12V (F7, pin 4 of the diagnostic connector) through a small perfboard: fuse, reverse-polarity diode, transient cap, 12V→5V buck. Build in [`docs/hardware/f7-power.md`](docs/hardware/f7-power.md), rationale in [ADR 0015](docs/decisions/0015-f7-12v-power-path.md).
+For ride captures, flash `firmware/wifi-bridge/` instead (`bin/flash-usb wifi-bridge`, or `bin/ota-wifi-bridge` once the board is on the bike). The capture then runs in the browser rather than on a laptop: join the bridge's AP, open `http://192.168.4.1/`, Start capture, ride, Stop, Export. The page writes frames as they arrive and splices over WiFi dropouts from the firmware's ring buffer.
+
+```
+python scripts/capture.py --stdin --label first-ride < ~/Downloads/capture-....log
+```
+
+See [`firmware/wifi-bridge/README.md`](firmware/wifi-bridge/README.md). Since the laptop's gone at that point, the adapter runs off the bike's switched 12V (F7, pin 4 of the diagnostic connector) through a small perfboard: fuse, reverse-polarity diode, transient cap, 12V→5V buck. Build in [`docs/hardware/f7-power.md`](docs/hardware/f7-power.md), rationale in [ADR 0015](docs/decisions/0015-f7-12v-power-path.md).
 
 ## Repo layout
 
@@ -116,6 +167,7 @@ docs/
   references/            external sources, datasheets, related projects
 logs/                    raw captures
 scripts/                 Python parsers, decoders, analyzers
+bin/                     thin wrappers around the common pio / capture.py calls
 firmware/                ESP32 subprojects (can-logger, wifi-bridge)
 ```
 
@@ -126,7 +178,7 @@ firmware/                ESP32 subprojects (can-logger, wifi-bridge)
 
 ## Caveats
 
-Any of this could be wrong. Findings marked `provisional` haven't been replicated across bikes or sessions. It is not a dashboard yet, and plenty of structure inside partially-decoded and always-zero bytes is still unaccounted for. If you have another 390-platform bike and want to help, another capture on the same experiments is more useful than almost anything else right now.
+Any of this could be wrong. Findings marked `provisional` haven't been replicated across bikes or sessions. It is not a dashboard yet. If you have another 390-platform bike and want to help, another capture on the same experiments is more useful than almost anything else right now.
 
 ## AI usage
 

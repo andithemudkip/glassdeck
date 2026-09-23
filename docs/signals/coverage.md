@@ -24,7 +24,7 @@ Index of decoded signals and per-ID payload coverage on the 2020 Husqvarna Svart
 | side_stand | `540` | D3 bit 0 bool | confirmed | [signal-side-stand](../findings/can/signal-side-stand.md) |
 | coolant_temp | `540` | D5:D6 BE u16, 0.1 °C | confirmed | [signal-coolant-temp](../findings/can/signal-coolant-temp.md) |
 | kill_switch | `541` | D2 bit 4 bool (primary) | confirmed | [signal-kill-switch](../findings/can/signal-kill-switch.md) |
-| engine_on_counter | `541` | D4 bits 6:0, 7-bit mod-128, ~1 Hz | confirmed | [signal-engine-on-counter](../findings/can/signal-engine-on-counter.md) |
+| engine_on_counter | `541` | D4 u8, 8-bit mod-256, ~1 Hz | confirmed | [signal-engine-on-counter](../findings/can/signal-engine-on-counter.md) |
 | engine_off_counter | `541` | D6 u8, 8-bit mod-256, ~1 Hz | confirmed | [signal-engine-off-counter](../findings/can/signal-engine-off-counter.md) |
 | kill_switch (redundant mirror) | `121` | D5 bit 2 | confirmed | [signal-kill-switch](../findings/can/signal-kill-switch.md) |
 | kill_switch (redundant mirror) | `5B0` | D0 bit 4 | confirmed | [signal-kill-switch](../findings/can/signal-kill-switch.md) |
